@@ -72,7 +72,7 @@ namespace SpaceMissionDesign.Game
             margins["power"] = constraints.maxPowerW - design.TotalPowerDrawW;
 
             // --- Data rate ---
-            double dataRatio = design.TotalDataRateKbps / Mathf.Max(constraints.minDataRateKbps, 1);
+            double dataRatio = design.TotalDataRateKbps / Mathf.Max((float)constraints.minDataRateKbps, 1f);
             double dataScore = Mathf.Clamp01((float)(dataRatio / 2.0f)) * 5; // up to 5 points
             score += dataScore;
 

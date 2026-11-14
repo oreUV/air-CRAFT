@@ -67,12 +67,12 @@ namespace SpaceMissionDesign.Game
 
             spacecraftDesign = new SpacecraftDesign();
             constraints = new MissionConstraints(
-                budgetUsd: 500_000_000,
-                maxMassKg: 50000,
-                maxPowerW: 10000,
-                minDataRateKbps: 1,
-                maxDataStorageGb: 1000,
-                missionLifetimeDays: 365
+                500_000_000,
+                50000,
+                10000,
+                1,
+                1000,
+                365
             );
             currentPhase = GamePhase.MainMenu;
             playerCount = 1;
