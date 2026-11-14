@@ -15,6 +15,8 @@ namespace SpaceMissionDesign.UI
 
         private Transform rocketRoot;
         private Transform focus;
+        private OrbitCamera cameraRig;
+        private Vector3 flameBaseScale = Vector3.one;
         private Transform flame;
         private ParticleSystem exhaust;
         private Vector3 focusHome = new Vector3(4f, 11.5f, 0f);
@@ -158,9 +160,10 @@ namespace SpaceMissionDesign.UI
             var orbit = cam.GetComponent<OrbitCamera>();
             if (orbit == null) orbit = cam.gameObject.AddComponent<OrbitCamera>();
             orbit.target = focus;
-            orbit.distance = 46f;
-            orbit.minDistance = 22f;
-            orbit.maxDistance = 100f;
+            orbit.minDistance = 14f;
+            orbit.maxDistance = 130f;
+            orbit.SetHomeDistance(46f);
+            cameraRig = orbit;
         }
 
         // ---------------- model import ----------------
@@ -421,6 +424,7 @@ namespace SpaceMissionDesign.UI
             // Engine flame (hidden until liftoff).
             var flameGO = Cylinder("Engine flame", new Vector3(0, -1.7f, 0), .62f, 3.4f, flameMat, root);
             flame = flameGO.transform;
+            flameBaseScale = flame.localScale;
             flame.gameObject.SetActive(false);
 
             BuildExhaust(root, Mathf.Min(EngineH * .5f, 1.1f));
@@ -478,6 +482,7 @@ namespace SpaceMissionDesign.UI
         private IEnumerator LaunchRoutine()
         {
             launching = true;
+            cameraRig?.ClearPan();
             var root = rocketRoot;
             float t = 0f;
             float ignition = .55f;
@@ -494,11 +499,11 @@ namespace SpaceMissionDesign.UI
                 t += Time.deltaTime;
                 if (root == null) yield break;
 
-                // Flicker the flame cone.
+                // Flicker the flame cone without resetting its base proportions.
                 if (flame != null)
                 {
                     float flicker = 1f + Mathf.Sin(Time.time * 38f) * .12f;
-                    flame.localScale = new Vector3(1.7f * flicker, 1.7f * flicker, 1.7f * flicker);
+                    flame.localScale = new Vector3(flameBaseScale.x * flicker, flameBaseScale.y * (2f - flicker), flameBaseScale.z * flicker);
                 }
 
                 if (t > ignition)
@@ -575,34 +580,158 @@ namespace SpaceMissionDesign.UI
         }
     }
 
-    /// <summary>Simple orbit camera: right-drag to rotate, scroll to zoom.</summary>
+    /// <summary>
+    /// Orbit / pan / zoom camera driven by the mouse.
+    ///   • Scroll wheel      – zoom in and out (smoothed, never passes through the target)
+    ///   • Left-drag         – move (pan) the view, when the pointer is over the open 3D area
+    ///   • Middle-drag       – move (pan) the view, works anywhere
+    ///   • Right-drag        – orbit around the target
+    ///   • Shift + drag      – move (pan) instead of orbiting
+    /// </summary>
     public sealed class OrbitCamera : MonoBehaviour
     {
         public Transform target;
         public float distance = 46f;
-        public float minDistance = 22f;
-        public float maxDistance = 100f;
+        public float minDistance = 12f;
+        public float maxDistance = 140f;
+
+        [Header("Feel")]
+        [Tooltip("Fraction of the current distance moved per scroll notch.")]
+        public float zoomStep = .12f;
+        public float orbitSensitivity = 4f;
+        [Tooltip("How far the view can be panned away from the target, in world units.")]
+        public float maxPanDistance = 70f;
 
         private float pitch = 5f;
         private float yaw = 0f;
+        private float homeDistance = 46f;
+        private float targetDistance;
+        private Vector3 panWanted;
+        private Vector3 panApplied;
+        private bool initialised;
+        private bool leftPan;
+        private float lastLeftClick = -10f;
+        private Vector3 lastMouse;
 
         private void LateUpdate()
         {
             if (target == null) return;
 
-            if (Input.GetMouseButton(1))
+            if (!initialised)
             {
-                yaw += Input.GetAxis("Mouse X") * 4f;
-                pitch -= Input.GetAxis("Mouse Y") * 4f;
+                homeDistance = targetDistance = distance = Mathf.Max(distance, minDistance);
+                lastMouse = Input.mousePosition;
+                initialised = true;
             }
+
+            float dt = Mathf.Max(Time.deltaTime, 1e-4f);
+            Vector3 mouse = Input.mousePosition;
+            Vector3 delta = mouse - lastMouse;
+            lastMouse = mouse;
+
+            // ---------------- zoom ----------------
             float scroll = Input.mouseScrollDelta.y;
             if (Mathf.Abs(scroll) > .01f)
-                distance = Mathf.Clamp(distance - scroll * 3.5f, minDistance, maxDistance);
+            {
+                // Clamp per-frame so a big trackpad flick cannot invert or leap the zoom.
+                float factor = Mathf.Clamp(1f - scroll * zoomStep, .55f, 1.8f);
+                targetDistance = Mathf.Clamp(targetDistance * factor, minDistance, maxDistance);
+            }
 
-            pitch = Mathf.Clamp(pitch, -15f, 80f);
+            // Exponential smoothing keeps the zoom frame-rate independent and smooth.
+            distance = Mathf.Lerp(distance, targetDistance, 1f - Mathf.Exp(-14f * dt));
+            if (Mathf.Abs(distance - targetDistance) < .002f) distance = targetDistance;
+
+            // ---------------- orbit ----------------
+            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            if (Input.GetMouseButton(1) && !shift)
+            {
+                yaw += Input.GetAxis("Mouse X") * orbitSensitivity;
+                pitch -= Input.GetAxis("Mouse Y") * orbitSensitivity;
+            }
+
+            // ---------------- pan ----------------
+            // Left-drag only pans when the press started over the open 3D area, so the
+            // UI panel and its buttons keep working normally. Double-clicking that area
+            // recentres the view, which is the way back if you pan or zoom off into space.
+            if (Input.GetMouseButtonDown(0) && !shift && !PointerOverUI())
+            {
+                float now = Time.unscaledTime;
+                if (now - lastLeftClick < .28f)
+                {
+                    ResetView();
+                }
+                else
+                {
+                    leftPan = true;
+                }
+                lastLeftClick = now;
+            }
+            if (Input.GetMouseButtonUp(0))
+                leftPan = false;
+
+            bool panHeld = Input.GetMouseButton(2) ||
+                           (shift && (Input.GetMouseButton(0) || Input.GetMouseButton(1))) ||
+                           leftPan;
+
+            if (panHeld)
+            {
+                // 1:1 "grab the world" panning: convert screen pixels into world units at the
+                // pivot's depth so the scene follows the cursor exactly at any zoom level.
+                float worldPerPixel = WorldUnitsPerPixel();
+                panWanted -= (transform.right * delta.x + transform.up * delta.y) * worldPerPixel;
+                panWanted = Vector3.ClampMagnitude(panWanted, maxPanDistance);
+            }
+
+            panApplied = Vector3.Lerp(panApplied, panWanted, 1f - Mathf.Exp(-20f * dt));
+
+            // ---------------- apply ----------------
+            pitch = Mathf.Clamp(pitch, -20f, 85f);
+            var pivot = target.position + panApplied;
             var rot = Quaternion.Euler(pitch, yaw, 0f);
-            transform.position = target.position + rot * new Vector3(0f, 0f, -distance);
-            transform.LookAt(target);
+            transform.position = pivot + rot * new Vector3(0f, 0f, -distance);
+            transform.LookAt(pivot);
+        }
+
+        /// <summary>Clears any panning and returns to the starting orientation and distance.</summary>
+        public void ResetView()
+        {
+            pitch = 5f;
+            yaw = 0f;
+            panWanted = Vector3.zero;
+            panApplied = Vector3.zero;
+            targetDistance = homeDistance;
+            distance = homeDistance;
+        }
+
+        /// <summary>Drops the pan offset but keeps the current zoom and angle.</summary>
+        public void ClearPan()
+        {
+            panWanted = Vector3.zero;
+            panApplied = Vector3.zero;
+        }
+
+        /// <summary>
+        /// Uses the closest distance at which the model is still fully visible when the user
+        /// has scrolled too far in, so the camera never ends up inside the rocket.
+        /// </summary>
+        public void SetHomeDistance(float value)
+        {
+            homeDistance = targetDistance = distance = Mathf.Clamp(value, minDistance, maxDistance);
+        }
+
+        private float WorldUnitsPerPixel()
+        {
+            var cam = GetComponent<Camera>();
+            if (cam == null) return distance * .0019f;
+            float halfFov = cam.fieldOfView * .5f * Mathf.Deg2Rad;
+            return 2f * distance * Mathf.Tan(halfFov) / Mathf.Max(Screen.height, 1);
+        }
+
+        private static bool PointerOverUI()
+        {
+            var es = UnityEngine.EventSystems.EventSystem.current;
+            return es != null && es.IsPointerOverGameObject();
         }
     }
 }
