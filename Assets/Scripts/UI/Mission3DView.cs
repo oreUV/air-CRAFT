@@ -409,8 +409,9 @@ namespace SpaceMissionDesign.UI
         // ---------------- rocket assembly ----------------
 
         /// <summary>
-        /// Loads a Saturn V part, applies the global scale, and stacks it so its bottom-centre
-        /// sits at <paramref name="at"/>. Returns the world y of the part's top so the next
+        /// Loads a Saturn V part, orients it upright (longest axis = +Y, wide end down),
+        /// applies the global scale, and stacks it so its bottom-centre sits at
+        /// <paramref name="at"/>. Returns the world y of the part's top so the next
         /// part can be stacked directly above it.
         /// </summary>
         private float StackSaturnVPart(Dictionary<string, GameObject> parts, string name,
@@ -421,13 +422,38 @@ namespace SpaceMissionDesign.UI
             var go = Instantiate(prefab, parent);
             go.name = name;
             go.transform.localPosition = Vector3.zero;
-            go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f);
-            go.transform.localScale = Vector3.one * globalScale;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
 
             foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
             foreach (var anim in go.GetComponentsInChildren<Animator>()) Destroy(anim);
 
             if (!TryLocalBounds(go, parent, out var bounds)) return at.y;
+
+            // --- Orient the part upright from its mesh, not from the FBX axis conversion ---
+            var upright = UprightRotation(bounds.size);
+            if (upright != Quaternion.identity)
+            {
+                go.transform.localRotation = upright;
+                if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
+            }
+
+            // Keep the wide end (nozzle / base) pointing down.
+            if (WideEndIsUp(go))
+            {
+                go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
+                if (TryLocalBounds(go, parent, out var flipped)) bounds = flipped;
+            }
+
+            // Apply yaw (for fins around the stage) after the part is upright.
+            if (yaw != 0f)
+                go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * go.transform.localRotation;
+
+            // Re-measure after all rotations.
+            TryLocalBounds(go, parent, out bounds);
+
+            // Uniform scale — the part's own proportions are preserved.
+            go.transform.localScale = Vector3.one * globalScale;
 
             Vector3 min = Vector3.Scale(bounds.min, Vector3.one * globalScale);
             Vector3 max = Vector3.Scale(bounds.max, Vector3.one * globalScale);
@@ -439,6 +465,40 @@ namespace SpaceMissionDesign.UI
                 foreach (var r in go.GetComponentsInChildren<Renderer>()) r.sharedMaterial = tint;
 
             return at.y + (max.y - min.y);
+        }
+
+        /// <summary>
+        /// Orient-aware height of a part: rotates it upright, then reports the Y extent.
+        /// </summary>
+        private float OrientedHeight(GameObject prefab, Transform space)
+        {
+            if (prefab == null) return 0f;
+            var go = Instantiate(prefab, space);
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
+
+            foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
+            foreach (var anim in go.GetComponentsInChildren<Animator>()) Destroy(anim);
+
+            float h = 0f;
+            if (TryLocalBounds(go, space, out var bounds))
+            {
+                var upright = UprightRotation(bounds.size);
+                if (upright != Quaternion.identity)
+                {
+                    go.transform.localRotation = upright;
+                    if (TryLocalBounds(go, space, out var stood)) bounds = stood;
+                }
+                if (WideEndIsUp(go))
+                {
+                    go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
+                    if (TryLocalBounds(go, space, out var flipped)) bounds = flipped;
+                }
+                h = bounds.size.y;
+            }
+            Destroy(go);
+            return h;
         }
 
         public void Refresh(SpacecraftDesign design)
@@ -469,7 +529,8 @@ namespace SpaceMissionDesign.UI
             if (!usingSaturnV)
                 Debug.Log("Mission3DView: no Saturn V models in Resources/Models/SaturnV, using primitive rocket.");
 
-            // --- Measure all parts and compute a global scale so the full stack is ~28u tall ---
+            // --- Measure all parts (oriented upright) and compute a global scale so
+            //     the full stack is ~28u tall ---
             float globalScale = 0.025f;
             if (usingSaturnV)
             {
@@ -477,10 +538,7 @@ namespace SpaceMissionDesign.UI
                 foreach (var kv in parts)
                 {
                     if (kv.Key == "fin (print 4)") continue; // fins don't stack vertically
-                    var go = Instantiate(kv.Value);
-                    if (TryLocalBounds(go, null, out var b))
-                        totalRawHeight += b.size.y;
-                    Destroy(go);
+                    totalRawHeight += OrientedHeight(kv.Value, root);
                 }
                 globalScale = 28f / Mathf.Max(totalRawHeight, 1f);
             }
@@ -491,8 +549,27 @@ namespace SpaceMissionDesign.UI
             if (usingSaturnV)
             {
                 // Measure S-IC bottom width for fin placement and stage width tracking.
+                // Orient it upright first so we measure across the diameter, not the length.
                 var go0 = Instantiate(parts["S-IC bottom"]);
-                TryLocalBounds(go0, root, out var b0);
+                go0.transform.localPosition = Vector3.zero;
+                go0.transform.localRotation = Quaternion.identity;
+                go0.transform.localScale = Vector3.one;
+                foreach (var col in go0.GetComponentsInChildren<Collider>()) Destroy(col);
+                foreach (var anim in go0.GetComponentsInChildren<Animator>()) Destroy(anim);
+                if (TryLocalBounds(go0, root, out var b0))
+                {
+                    var up0 = UprightRotation(b0.size);
+                    if (up0 != Quaternion.identity)
+                    {
+                        go0.transform.localRotation = up0;
+                        if (TryLocalBounds(go0, root, out var b0s)) b0 = b0s;
+                    }
+                    if (WideEndIsUp(go0))
+                    {
+                        go0.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go0.transform.localRotation;
+                        if (TryLocalBounds(go0, root, out var b0f)) b0 = b0f;
+                    }
+                }
                 Destroy(go0);
                 stage1Width = Mathf.Max(b0.size.x, b0.size.z) * globalScale;
 
