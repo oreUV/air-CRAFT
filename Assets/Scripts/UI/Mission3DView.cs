@@ -391,12 +391,12 @@ namespace SpaceMissionDesign.UI
 
         /// <summary>
         /// Loads a Saturn V part, orients it upright (longest axis = +Y, wide end down),
-        /// applies the global scale, and stacks it so its bottom-centre sits at
-        /// <paramref name="at"/>. Returns the world y of the part's top so the next
-        /// part can be stacked directly above it.
+        /// scales it uniformly so it is <paramref name="targetHeight"/> tall, and stacks
+        /// it so its bottom-centre sits at <paramref name="at"/>. Returns the world y of
+        /// the part's top so the next part can be stacked directly above it.
         /// </summary>
         private float StackSaturnVPart(Dictionary<string, GameObject> parts, string name,
-            Transform parent, Vector3 at, float globalScale, Material tint, float yaw = 0f)
+            Transform parent, Vector3 at, float targetHeight, Material tint, float yaw = 0f)
         {
             if (!parts.TryGetValue(name, out var prefab) || prefab == null) return at.y;
 
@@ -422,7 +422,6 @@ namespace SpaceMissionDesign.UI
             // --- Step 2: make sure the wide end (nozzle / base) points DOWN ---
             if (WideEndIsUp(go))
             {
-                // Flip upside down: rotate 180° around the X axis in world space.
                 go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
                 if (TryLocalBounds(go, parent, out var flipped)) bounds = flipped;
             }
@@ -434,11 +433,12 @@ namespace SpaceMissionDesign.UI
             // Re-measure after all rotations.
             TryLocalBounds(go, parent, out bounds);
 
-            // Uniform scale — the part's own proportions are preserved.
-            go.transform.localScale = Vector3.one * globalScale;
+            // --- Step 4: uniform scale so the part is targetHeight tall ---
+            float h = Mathf.Max(bounds.size.y, .0001f);
+            go.transform.localScale = Vector3.one * (targetHeight / h);
 
-            Vector3 min = Vector3.Scale(bounds.min, Vector3.one * globalScale);
-            Vector3 max = Vector3.Scale(bounds.max, Vector3.one * globalScale);
+            Vector3 min = Vector3.Scale(bounds.min, go.transform.localScale);
+            Vector3 max = Vector3.Scale(bounds.max, go.transform.localScale);
             Vector3 centre = (min + max) * .5f;
 
             go.transform.localPosition = at - new Vector3(centre.x, min.y, centre.z);
@@ -532,27 +532,31 @@ namespace SpaceMissionDesign.UI
             if (!usingSaturnV)
                 Debug.Log("Mission3DView: no Saturn V models in Resources/Models/SaturnV, using primitive rocket.");
 
-            // --- Measure all parts (oriented upright) and compute a global scale so
-            //     the full stack is ~28u tall ---
-            float globalScale = 0.025f;
-            if (usingSaturnV)
+            // --- Per-part target heights based on real Saturn V proportions ---
+            // Real heights (feet): S-IC 138, S-II 81.5, S-IVB 58.3, SM 24.6, CM 11.
+            // Scaled so the full stack is ~28 units tall, preserving each part's
+            // own aspect ratio (the STL files aren't proportionally consistent).
+            var partTargetHeight = new Dictionary<string, float>
             {
-                float totalRawHeight = 0f;
-                foreach (var kv in parts)
-                {
-                    if (kv.Key == "fin (print 4)") continue; // fins don't stack vertically
-                    totalRawHeight += OrientedHeight(kv.Value, root);
-                }
-                globalScale = 28f / Mathf.Max(totalRawHeight, 1f);
-            }
+                {"S-IC bottom", 7.2f},
+                {"S-IC top", 4.0f},
+                {"S-IC joining cube", 0.6f},
+                {"stage 1-2 coupler", 0.9f},
+                {"S-II", 6.2f},
+                {"stage 1-2 coupler v2", 0.9f},
+                {"S-IV b", 4.6f},
+                {"lem shroud", 2.0f},
+                {"service module", 2.4f},
+                {"command moduel", 1.4f},
+                {"escape tower", 1.4f},
+            };
 
             // --- Stack the Saturn V from bottom to top ---
             float y = 0f;
             float stage1Width = 5.4f; // fallback
             if (usingSaturnV)
             {
-                // Measure S-IC bottom width for fin placement and stage width tracking.
-                // Orient it upright first so we measure across the diameter, not the length.
+                // Measure S-IC bottom width for fin placement.
                 var go0 = Instantiate(parts["S-IC bottom"]);
                 go0.transform.localPosition = Vector3.zero;
                 go0.transform.localRotation = Quaternion.identity;
@@ -574,21 +578,22 @@ namespace SpaceMissionDesign.UI
                     }
                 }
                 Destroy(go0);
-                stage1Width = Mathf.Max(b0.size.x, b0.size.z) * globalScale;
+                float s0h = partTargetHeight["S-IC bottom"] / Mathf.Max(b0.size.y, .0001f);
+                stage1Width = Mathf.Max(b0.size.x, b0.size.z) * s0h;
 
-                y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), globalScale, white);
-                y = StackSaturnVPart(parts, "S-IC top", root, new Vector3(0, y, 0), globalScale, metal);
-                y = StackSaturnVPart(parts, "S-IC joining cube", root, new Vector3(0, y, 0), globalScale, dark);
-                y = StackSaturnVPart(parts, "stage 1-2 coupler", root, new Vector3(0, y, 0), globalScale, grey);
-                y = StackSaturnVPart(parts, "S-II", root, new Vector3(0, y, 0), globalScale, metal);
-                y = StackSaturnVPart(parts, "stage 1-2 coupler v2", root, new Vector3(0, y, 0), globalScale, grey);
-                y = StackSaturnVPart(parts, "S-IV b", root, new Vector3(0, y, 0), globalScale, white);
+                y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), partTargetHeight["S-IC bottom"], white);
+                y = StackSaturnVPart(parts, "S-IC top", root, new Vector3(0, y, 0), partTargetHeight["S-IC top"], metal);
+                y = StackSaturnVPart(parts, "S-IC joining cube", root, new Vector3(0, y, 0), partTargetHeight["S-IC joining cube"], dark);
+                y = StackSaturnVPart(parts, "stage 1-2 coupler", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler"], grey);
+                y = StackSaturnVPart(parts, "S-II", root, new Vector3(0, y, 0), partTargetHeight["S-II"], metal);
+                y = StackSaturnVPart(parts, "stage 1-2 coupler v2", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler v2"], grey);
+                y = StackSaturnVPart(parts, "S-IV b", root, new Vector3(0, y, 0), partTargetHeight["S-IV b"], white);
                 // Lem shroud (SLA) covers the Lunar Module, sits above S-IVB / Instrument Unit.
-                y = StackSaturnVPart(parts, "lem shroud", root, new Vector3(0, y, 0), globalScale, dark);
+                y = StackSaturnVPart(parts, "lem shroud", root, new Vector3(0, y, 0), partTargetHeight["lem shroud"], dark);
                 // Service module sits above the SLA, command module on top of the service module.
-                y = StackSaturnVPart(parts, "service module", root, new Vector3(0, y, 0), globalScale, blue);
-                y = StackSaturnVPart(parts, "command moduel", root, new Vector3(0, y, 0), globalScale, white);
-                y = StackSaturnVPart(parts, "escape tower", root, new Vector3(0, y, 0), globalScale, dark);
+                y = StackSaturnVPart(parts, "service module", root, new Vector3(0, y, 0), partTargetHeight["service module"], blue);
+                y = StackSaturnVPart(parts, "command moduel", root, new Vector3(0, y, 0), partTargetHeight["command moduel"], white);
+                y = StackSaturnVPart(parts, "escape tower", root, new Vector3(0, y, 0), partTargetHeight["escape tower"], dark);
 
                 // --- Fins around the first stage ---
                 if (parts.ContainsKey("fin (print 4)"))
@@ -600,7 +605,7 @@ namespace SpaceMissionDesign.UI
                         float fr = stage1Radius + .12f;
                         StackSaturnVPart(parts, "fin (print 4)", root,
                             new Vector3(Mathf.Cos(a) * fr, .3f, Mathf.Sin(a) * fr),
-                            globalScale, grey, yaw: a * Mathf.Rad2Deg);
+                            partTargetHeight["S-IC bottom"], grey, yaw: a * Mathf.Rad2Deg);
                     }
                 }
             }
