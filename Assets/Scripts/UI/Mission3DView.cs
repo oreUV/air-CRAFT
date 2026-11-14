@@ -391,13 +391,14 @@ namespace SpaceMissionDesign.UI
 
         /// <summary>
         /// Loads a Saturn V part, orients it upright (longest axis = +Y, wide end down),
-        /// scales it uniformly so it is <paramref name="targetHeight"/> tall, and stacks
-        /// it so its bottom-centre sits at <paramref name="at"/>. Returns the world y of
-        /// the part's top so the next part can be stacked directly above it.
+        /// scales it uniformly so it is <paramref name="targetHeight"/> tall (with an optional
+        /// <paramref name="widthMult"/> to widen just X/Z), and stacks it so its bottom-centre
+        /// sits at <paramref name="at"/>. Returns the world y of the part's top so the next
+        /// part can be stacked directly above it.
         /// </summary>
         private float StackSaturnVPart(Dictionary<string, GameObject> parts, string name,
             Transform parent, Vector3 at, float targetHeight, Material tint, float yaw = 0f,
-            Vector3 extraEuler = default)
+            Vector3 extraEuler = default, float widthMult = 1f)
         {
             if (!parts.TryGetValue(name, out var prefab) || prefab == null) return at.y;
 
@@ -438,9 +439,11 @@ namespace SpaceMissionDesign.UI
             // Re-measure after all rotations.
             TryLocalBounds(go, parent, out bounds);
 
-            // --- Step 4: uniform scale so the part is targetHeight tall ---
+            // --- Step 4: scale so the part is targetHeight tall, then widen X/Z ---
             float h = Mathf.Max(bounds.size.y, .0001f);
-            go.transform.localScale = Vector3.one * (targetHeight / h);
+            float sy = targetHeight / h;
+            float sxz = sy * widthMult;
+            go.transform.localScale = new Vector3(sxz, sy, sxz);
 
             Vector3 min = Vector3.Scale(bounds.min, go.transform.localScale);
             Vector3 max = Vector3.Scale(bounds.max, go.transform.localScale);
@@ -563,6 +566,12 @@ namespace SpaceMissionDesign.UI
                 {"S-IC top", new Vector3(180f, 0f, 0f)},
             };
 
+            // --- Per-part width multiplier (X/Z only) ---
+            var partWidthMult = new Dictionary<string, float>
+            {
+                {"S-IC top", 1.4f},
+            };
+
             // --- Stack the Saturn V from bottom to top ---
             float y = 0f;
             float stage1Width = 5.4f; // fallback
@@ -596,7 +605,7 @@ namespace SpaceMissionDesign.UI
                 y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), partTargetHeight["S-IC bottom"], white,
                     extraEuler: partExtraEuler["S-IC bottom"]);
                 y = StackSaturnVPart(parts, "S-IC top", root, new Vector3(0, y, 0), partTargetHeight["S-IC top"], metal,
-                    extraEuler: partExtraEuler["S-IC top"]);
+                    extraEuler: partExtraEuler["S-IC top"], widthMult: partWidthMult["S-IC top"]);
                 y = StackSaturnVPart(parts, "stage 1-2 coupler", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler"], grey);
                 y = StackSaturnVPart(parts, "S-II", root, new Vector3(0, y, 0), partTargetHeight["S-II"], metal);
                 y = StackSaturnVPart(parts, "stage 1-2 coupler v2", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler v2"], grey);
