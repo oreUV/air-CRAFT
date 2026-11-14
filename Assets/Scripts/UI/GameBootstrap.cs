@@ -19,6 +19,10 @@ namespace SpaceMissionDesign.UI
         private static Font uiFont;
 
         private Canvas canvas;
+        private Text statsText;
+        private Text budgetValueText;
+        private Text violationsText;
+        private Button nextButton;
         private MissionManager manager => MissionManager.Instance;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -168,6 +172,66 @@ namespace SpaceMissionDesign.UI
             return input;
         }
 
+        private static Slider NewSlider(Transform parent, Vector2 pos, Vector2 size, float min, float max,
+            float value, UnityEngine.Events.UnityAction<float> onChanged)
+        {
+            var rt = NewRect(parent, "Slider", pos, size);
+            var slider = rt.gameObject.AddComponent<Slider>();
+
+            // Track.
+            var track = NewRect(rt, "Background", Vector2.zero, Vector2.zero);
+            track.anchorMin = new Vector2(0f, .5f);
+            track.anchorMax = new Vector2(1f, .5f);
+            track.offsetMin = new Vector2(0f, -5f);
+            track.offsetMax = new Vector2(0f, 5f);
+            var trackImg = track.gameObject.AddComponent<Image>();
+            trackImg.color = new Color(1f, 1f, 1f, .14f);
+
+            // Filled portion.
+            var fillArea = NewRect(rt, "Fill Area", Vector2.zero, Vector2.zero);
+            fillArea.anchorMin = new Vector2(0f, .5f);
+            fillArea.anchorMax = new Vector2(1f, .5f);
+            fillArea.offsetMin = new Vector2(12f, -5f);
+            fillArea.offsetMax = new Vector2(-12f, 5f);
+
+            var fill = NewRect(fillArea, "Fill", Vector2.zero, Vector2.zero);
+            fill.anchorMin = Vector2.zero;
+            fill.anchorMax = Vector2.one;
+            fill.offsetMin = Vector2.zero;
+            fill.offsetMax = Vector2.zero;
+            var fillImg = fill.gameObject.AddComponent<Image>();
+            fillImg.color = new Color(.24f, .60f, .95f);
+
+            // Handle.
+            var handleArea = NewRect(rt, "Handle Slide Area", Vector2.zero, Vector2.zero);
+            handleArea.anchorMin = Vector2.zero;
+            handleArea.anchorMax = Vector2.one;
+            handleArea.offsetMin = new Vector2(12f, 0f);
+            handleArea.offsetMax = new Vector2(-12f, 0f);
+
+            var handle = NewRect(handleArea, "Handle", Vector2.zero, new Vector2(24f, 24f));
+            var handleImg = handle.gameObject.AddComponent<Image>();
+            handleImg.color = new Color(.93f, .96f, 1f);
+
+            slider.fillRect = fill;
+            slider.handleRect = handle;
+            slider.targetGraphic = handleImg;
+            slider.direction = Slider.Direction.LeftToRight;
+            slider.minValue = min;
+            slider.maxValue = max;
+            slider.wholeNumbers = true;
+            slider.value = Mathf.Clamp(value, min, max);
+            if (onChanged != null) slider.onValueChanged.AddListener(onChanged);
+            return slider;
+        }
+
+        private static string Money(double usd)
+        {
+            return usd >= 1_000_000_000
+                ? $"${usd / 1_000_000_000:F2}B"
+                : $"${usd / 1_000_000:N0}M";
+        }
+
         private static void Background(Transform parent)
         {
             // Light full-screen tint: keeps the 3D scene visible.
@@ -274,15 +338,31 @@ namespace SpaceMissionDesign.UI
             Mission3DView.Instance?.Refresh(manager.SpacecraftDesign);
             Clear();
             Background(canvas.transform);
-            NewText(canvas.transform, "SPACECRAFT DESIGN", 40, new Vector2(-500, 400), new Vector2(860, 60), TextAnchor.MiddleCenter, null, true);
-            NewText(canvas.transform, manager.CurrentObjective.missionName + " — add subsystems, then continue", 20,
-                new Vector2(-500, 352), new Vector2(880, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
+            NewText(canvas.transform, "SPACECRAFT DESIGN", 38, new Vector2(-500, 412), new Vector2(860, 56), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, manager.CurrentObjective.missionName + " — add subsystems, then continue", 19,
+                new Vector2(-500, 366), new Vector2(880, 34), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
 
             var d = manager.SpacecraftDesign;
             var c = manager.Constraints;
-            NewText(canvas.transform,
-                $"Mass {d.TotalMassKg:N0} / {c.maxMassKg:N0} kg\nPower {d.TotalPowerDrawW:N0} / {c.maxPowerW:N0} W\nCost ${d.TotalCostUsd:N0} / ${c.budgetUsd:N0}",
-                19, new Vector2(-500, 280), new Vector2(880, 90), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
+
+            statsText = NewText(canvas.transform, "", 19, new Vector2(-500, 306), new Vector2(880, 84), TextAnchor.MiddleCenter,
+                new Color(.85f, .90f, .98f));
+
+            // Budget slider ($250M – $2B).
+            NewText(canvas.transform, "MISSION BUDGET", 16, new Vector2(-780, 220), new Vector2(200, 28), TextAnchor.MiddleLeft,
+                new Color(.55f, .72f, .95f), true);
+            budgetValueText = NewText(canvas.transform, Money(c.budgetUsd), 17, new Vector2(-60, 220), new Vector2(110, 30),
+                TextAnchor.MiddleRight, new Color(.90f, .94f, 1f), true);
+            NewSlider(canvas.transform, new Vector2(-370, 220), new Vector2(500, 26),
+                (float)(MissionManager.MinBudgetUsd / 1_000_000.0),
+                (float)(MissionManager.MaxBudgetUsd / 1_000_000.0),
+                (float)(c.budgetUsd / 1_000_000.0),
+                millions =>
+                {
+                    if (manager == null) return;
+                    manager.SetBudget(millions * 1_000_000.0);
+                    UpdateDesignReadouts();
+                });
 
             var types = new[] { ComponentType.Hull, ComponentType.Propulsion, ComponentType.Power,
                                 ComponentType.Communications, ComponentType.Structure, ComponentType.Thermal };
@@ -290,22 +370,47 @@ namespace SpaceMissionDesign.UI
             {
                 int col = i % 2, row = i / 2;
                 float x = col == 0 ? -680f : -360f;
-                float y = 190f - row * 76f;
+                float y = 146f - row * 72f;
                 var type = types[i];
                 NewButton(canvas.transform, "+  " + type, new Vector2(x, y), new Vector2(300, 58), () => AddDefaultComponent(type), null, 18);
             }
 
-            var designer = FindFirstObjectByType<SpacecraftDesigner>();
-            var violations = designer != null ? designer.GetDesignViolations() : new List<string>();
-            string vText = violations.Count == 0
-                ? "All design constraints satisfied. Continue to instruments."
-                : "Design violations (fix before continuing):\n• " + string.Join("\n• ", violations);
-            NewText(canvas.transform, vText, 17, new Vector2(-500, -70), new Vector2(900, 130), TextAnchor.MiddleCenter,
-                violations.Count == 0 ? new Color(.45f, .95f, .60f) : new Color(1f, .45f, .42f));
+            violationsText = NewText(canvas.transform, "", 16, new Vector2(-500, -95), new Vector2(900, 110), TextAnchor.MiddleCenter,
+                Color.white);
 
             NewButton(canvas.transform, "Back", new Vector2(-680, -330), new Vector2(220, 50), ShowMissionSelect, new Color(.25f, .28f, .34f));
-            var next = NewButton(canvas.transform, "Next: Instruments", new Vector2(-360, -330), new Vector2(280, 50), ShowInstruments);
-            next.interactable = designer == null || violations.Count == 0;
+            nextButton = NewButton(canvas.transform, "Next: Instruments", new Vector2(-360, -330), new Vector2(280, 50), ShowInstruments);
+
+            UpdateDesignReadouts();
+        }
+
+        /// <summary>Refreshes only the text/validation of the design screen (used while dragging the budget slider).</summary>
+        private void UpdateDesignReadouts()
+        {
+            if (manager == null || manager.SpacecraftDesign == null) return;
+            var d = manager.SpacecraftDesign;
+            var c = manager.Constraints;
+
+            if (statsText != null)
+                statsText.text = $"Mass {d.TotalMassKg:N0} / {c.maxMassKg:N0} kg\n" +
+                                 $"Power {d.TotalPowerDrawW:N0} / {c.maxPowerW:N0} W\n" +
+                                 $"Cost ${d.TotalCostUsd:N0} / ${c.budgetUsd:N0}";
+            if (budgetValueText != null)
+                budgetValueText.text = Money(c.budgetUsd);
+
+            var spaceDesigner = designer;
+            var violations = spaceDesigner != null ? spaceDesigner.GetDesignViolations() : new List<string>();
+            if (violationsText != null)
+            {
+                violationsText.text = violations.Count == 0
+                    ? "All design constraints satisfied. Continue to instruments."
+                    : "Design violations (fix before continuing):\n• " + string.Join("\n• ", violations);
+                violationsText.color = violations.Count == 0
+                    ? new Color(.45f, .95f, .60f)
+                    : new Color(1f, .45f, .42f);
+            }
+            if (nextButton != null)
+                nextButton.interactable = violations.Count == 0;
         }
 
         private void AddDefaultComponent(ComponentType type)

@@ -26,6 +26,11 @@ namespace SpaceMissionDesign.Game
     {
         public static MissionManager Instance { get; private set; }
 
+        /// <summary>Budget slider range (USD). The cap was raised from $500M to $2B.</summary>
+        public const double MinBudgetUsd = 250_000_000;
+        public const double MaxBudgetUsd = 2_000_000_000;
+        public const double DefaultBudgetUsd = 1_000_000_000;
+
         [Header("Mission State")]
         [SerializeField] private MissionObjective currentObjective;
         [SerializeField] private MissionConstraints constraints;
@@ -67,7 +72,7 @@ namespace SpaceMissionDesign.Game
 
             spacecraftDesign = new SpacecraftDesign();
             constraints = new MissionConstraints(
-                500_000_000,
+                DefaultBudgetUsd,
                 50000,
                 10000,
                 1,
@@ -85,6 +90,8 @@ namespace SpaceMissionDesign.Game
             currentObjective = objective;
             // Mission lifetime comes from the objective (Apollo 11 is ~8 days, not a full year).
             constraints.missionLifetimeDays = Mathf.Clamp((float)objective.maxMissionLifetimeDays, 1f, 365f);
+            // Each new mission starts at the default budget so the slider is predictable.
+            constraints.budgetUsd = DefaultBudgetUsd;
             spacecraftDesign = new SpacecraftDesign { spacecraftName = objective.missionName + " Spacecraft" };
             simulationComplete = false;
             simulationResult = null;
@@ -140,6 +147,12 @@ namespace SpaceMissionDesign.Game
         {
             double spent = spacecraftDesign.TotalCostUsd;
             return (spent + cost) <= constraints.budgetUsd;
+        }
+
+        /// <summary>Sets the mission budget, clamped to the slider range.</summary>
+        public void SetBudget(double usd)
+        {
+            constraints.budgetUsd = Math.Max(MinBudgetUsd, Math.Min(MaxBudgetUsd, usd));
         }
 
         public bool MassOK(double additionalMass)
