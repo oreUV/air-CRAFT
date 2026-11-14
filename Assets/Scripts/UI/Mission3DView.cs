@@ -408,6 +408,39 @@ namespace SpaceMissionDesign.UI
 
         // ---------------- rocket assembly ----------------
 
+        /// <summary>
+        /// Loads a Saturn V part, applies the global scale, and stacks it so its bottom-centre
+        /// sits at <paramref name="at"/>. Returns the world y of the part's top so the next
+        /// part can be stacked directly above it.
+        /// </summary>
+        private float StackSaturnVPart(Dictionary<string, GameObject> parts, string name,
+            Transform parent, Vector3 at, float globalScale, Material tint, float yaw = 0f)
+        {
+            if (!parts.TryGetValue(name, out var prefab) || prefab == null) return at.y;
+
+            var go = Instantiate(prefab, parent);
+            go.name = name;
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f);
+            go.transform.localScale = Vector3.one * globalScale;
+
+            foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
+            foreach (var anim in go.GetComponentsInChildren<Animator>()) Destroy(anim);
+
+            if (!TryLocalBounds(go, parent, out var bounds)) return at.y;
+
+            Vector3 min = Vector3.Scale(bounds.min, Vector3.one * globalScale);
+            Vector3 max = Vector3.Scale(bounds.max, Vector3.one * globalScale);
+            Vector3 centre = (min + max) * .5f;
+
+            go.transform.localPosition = at - new Vector3(centre.x, min.y, centre.z);
+
+            if (tint != null)
+                foreach (var r in go.GetComponentsInChildren<Renderer>()) r.sharedMaterial = tint;
+
+            return at.y + (max.y - min.y);
+        }
+
         public void Refresh(SpacecraftDesign design)
         {
             if (rocketRoot != null) Destroy(rocketRoot.gameObject);
@@ -418,40 +451,86 @@ namespace SpaceMissionDesign.UI
             root.position = new Vector3(10f, .18f, 0f);
             rocketRoot = root;
 
-            var tankPrefab = Resources.Load<GameObject>("Models/fueltank1");
-            var capsulePrefab = Resources.Load<GameObject>("Models/cockpit");
-            var enginePrefab = Resources.Load<GameObject>("Models/thruster1");
-            bool usingModels = tankPrefab != null || capsulePrefab != null || enginePrefab != null;
-
-            // --- Stages (fueltank1) ---
-            float stage1Width = Stage1D, stage2Width = Stage2D;
-            if (tankPrefab != null)
+            // --- Load all Saturn V parts (kept aside: the old Tripo models remain in
+            //     Assets/Resources/Models/ but are no longer loaded by the game) ---
+            var parts = new Dictionary<string, GameObject>();
+            foreach (var partName in new[] {
+                "S-IC bottom", "S-IC top", "S-IC joining cube",
+                "stage 1-2 coupler", "S-II", "S-IV b",
+                "service module", "lem shroud", "command moduel",
+                "escape tower", "fin (print 4)"
+            })
             {
-                PlaceModel(tankPrefab, root, new Vector3(0, Stage1Base, 0), Stage1H, out var s1, 0f, white);
-                stage1Width = Mathf.Max(s1.x, s1.z);
-                PlaceModel(tankPrefab, root, new Vector3(0, Stage2Base, 0), Stage2H, out var s2, 0f, metal);
-                stage2Width = Mathf.Max(s2.x, s2.z);
+                var prefab = Resources.Load<GameObject>($"Models/SaturnV/{partName}");
+                if (prefab != null) parts[partName] = prefab;
+            }
+
+            bool usingSaturnV = parts.Count > 0;
+            if (!usingSaturnV)
+                Debug.Log("Mission3DView: no Saturn V models in Resources/Models/SaturnV, using primitive rocket.");
+
+            // --- Measure all parts and compute a global scale so the full stack is ~28u tall ---
+            float globalScale = 0.025f;
+            if (usingSaturnV)
+            {
+                float totalRawHeight = 0f;
+                foreach (var kv in parts)
+                {
+                    if (kv.Key == "fin (print 4)") continue; // fins don't stack vertically
+                    var go = Instantiate(kv.Value);
+                    if (TryLocalBounds(go, null, out var b))
+                        totalRawHeight += b.size.y;
+                    Destroy(go);
+                }
+                globalScale = 28f / Mathf.Max(totalRawHeight, 1f);
+            }
+
+            // --- Stack the Saturn V from bottom to top ---
+            float y = 0f;
+            float stage1Width = 5.4f; // fallback
+            if (usingSaturnV)
+            {
+                // Measure S-IC bottom width for fin placement and stage width tracking.
+                var go0 = Instantiate(parts["S-IC bottom"]);
+                TryLocalBounds(go0, root, out var b0);
+                Destroy(go0);
+                stage1Width = Mathf.Max(b0.size.x, b0.size.z) * globalScale;
+
+                y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), globalScale, white);
+                y = StackSaturnVPart(parts, "S-IC top", root, new Vector3(0, y, 0), globalScale, metal);
+                y = StackSaturnVPart(parts, "S-IC joining cube", root, new Vector3(0, y, 0), globalScale, dark);
+                y = StackSaturnVPart(parts, "stage 1-2 coupler", root, new Vector3(0, y, 0), globalScale, grey);
+                y = StackSaturnVPart(parts, "S-II", root, new Vector3(0, y, 0), globalScale, metal);
+                y = StackSaturnVPart(parts, "S-IV b", root, new Vector3(0, y, 0), globalScale, white);
+                y = StackSaturnVPart(parts, "service module", root, new Vector3(0, y, 0), globalScale, blue);
+                y = StackSaturnVPart(parts, "lem shroud", root, new Vector3(0, y, 0), globalScale, dark);
+                y = StackSaturnVPart(parts, "command moduel", root, new Vector3(0, y, 0), globalScale, white);
+                y = StackSaturnVPart(parts, "escape tower", root, new Vector3(0, y, 0), globalScale, dark);
+
+                // --- Fins around the first stage ---
+                if (parts.ContainsKey("fin (print 4)"))
+                {
+                    float stage1Radius = stage1Width * .5f;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        float a = i * Mathf.PI * .5f;
+                        float fr = stage1Radius + .12f;
+                        StackSaturnVPart(parts, "fin (print 4)", root,
+                            new Vector3(Mathf.Cos(a) * fr, .3f, Mathf.Sin(a) * fr),
+                            globalScale, grey, yaw: a * Mathf.Rad2Deg);
+                    }
+                }
             }
             else
             {
+                // --- Primitive fallback (original Tripo models are kept aside, not deleted) ---
                 Cylinder("Stage 1", new Vector3(0, Stage1Base + Stage1H * .5f, 0), Stage1D * .5f, Stage1H, white, root);
                 Cylinder("Stage 2", new Vector3(0, Stage2Base + Stage2H * .5f, 0), Stage2D * .5f, Stage2H, metal, root);
-                Cylinder("Sep 1-2", new Vector3(0, Stage1Base + Stage1H - .1f, 0), Stage1D * .5f, .22f, dark, root);
-            }
-
-            // --- Service module ---
-            Cylinder("Service module", new Vector3(0, ServiceBase + ServiceH * .5f, 0), ServiceD * .5f, ServiceH, metal, root);
-
-            // --- Command module (cockpit) ---
-            bool capsulePlaced = false;
-            if (capsulePrefab != null)
-                capsulePlaced = PlaceModel(capsulePrefab, root, new Vector3(0, CapsuleBase, 0), CapsuleH, 0f, white) != null;
-            if (!capsulePlaced)
+                Cylinder("Service module", new Vector3(0, ServiceBase + ServiceH * .5f, 0), ServiceD * .5f, ServiceH, metal, root);
                 Sphere("Command module", new Vector3(0, CapsuleBase + CapsuleH * .45f, 0), CapsuleD, white, root);
-
-            // --- Escape tower ---
-            Cylinder("Escape tower", new Vector3(0, StackTop + .6f, 0), .11f, 1.2f, dark, root);
-            Sphere("Tower tip", new Vector3(0, StackTop + 1.25f, 0), .24f, dark, root);
+                Cylinder("Escape tower", new Vector3(0, StackTop + .6f, 0), .11f, 1.2f, dark, root);
+                Sphere("Tower tip", new Vector3(0, StackTop + 1.25f, 0), .24f, dark, root);
+            }
 
             bool has = design != null;
             bool Has(ComponentType t)
@@ -461,66 +540,25 @@ namespace SpaceMissionDesign.UI
                 return false;
             }
 
-            // --- Engines (thruster1): centre bell plus a ring of four, spaced from real bounds ---
-            if (!has || Has(ComponentType.Propulsion))
-            {
-                if (enginePrefab != null)
-                {
-                    PlaceModel(enginePrefab, root, Vector3.zero, EngineH, out var mainBell, 0f, metal);
-                    float mainRadius = Mathf.Max(mainBell.x, mainBell.z) * .5f;
-
-                    // Scaling is uniform, so a shorter bell has proportionally the same width.
-                    const float bellH = 1.5f;
-                    float smallRadius = mainRadius * (bellH / EngineH);
-                    float ring = Mathf.Max(mainRadius + smallRadius * .9f, .45f);
-
-                    for (int i = 0; i < 4; i++)
-                    {
-                        float a = i * Mathf.PI * .5f + .4f;
-                        PlaceModel(enginePrefab, root,
-                            new Vector3(Mathf.Cos(a) * ring, 0, Mathf.Sin(a) * ring), bellH, 0f, metal);
-                    }
-
-                    // The generated nozzle meshes are thin open shells with a torn upper rim.
-                    // A recessed engine bay hides those rims and ties the cluster to stage 1,
-                    // leaving only the clean bell sections visible.
-                    float clusterRadius = ring + smallRadius;
-                    float bayBottom = EngineH * .52f;
-                    float bayTop = Stage1Base + .02f;
-                    Cylinder("Engine bay", new Vector3(0, (bayBottom + bayTop) * .5f, 0),
-                        clusterRadius * 1.06f, bayTop - bayBottom, dark, root);
-                    Cylinder("Thrust ring", new Vector3(0, Stage1Base - .04f, 0),
-                        stage1Width * .5f + .05f, .2f, grey, root);
-                }
-                else
-                {
-                    Cylinder("Engine bell", new Vector3(0, EngineH * .5f, 0), 1.2f, EngineH, dark, root);
-                    for (int i = 0; i < 4; i++)
-                    {
-                        float a = i * Mathf.PI * .5f + .4f;
-                        Cylinder("Nozzle", new Vector3(Mathf.Cos(a) * 1.0f, .45f, Mathf.Sin(a) * 1.0f), .3f, .9f, grey, root);
-                    }
-                }
-            }
-
-            // --- Structure: external struts ---
+            // --- Structure: external struts (around stage 1) ---
             if (Has(ComponentType.Structure))
             {
                 float r = stage1Width * .5f + .09f;
                 for (int i = 0; i < 4; i++)
                 {
                     float a = i * Mathf.PI * .5f;
-                    Cylinder("Strut", new Vector3(Mathf.Cos(a) * r, Stage1Base + Stage1H * .45f, Mathf.Sin(a) * r),
+                    Cylinder("Strut", new Vector3(Mathf.Cos(a) * r, 7f, Mathf.Sin(a) * r),
                         .08f, Stage1H * .8f, grey, root);
                 }
             }
 
-            float serviceMid = ServiceBase + ServiceH * .5f;
+            // Service module mid-point (for add-ons).
+            float serviceMid = y - 12f;
 
             // --- Power: fuel-cell boxes on the service module ---
             if (Has(ComponentType.Power))
             {
-                float x = ServiceD * .5f + .18f;
+                float x = stage1Width * .5f + .25f;
                 Cube("Fuel cell L", new Vector3(-x, serviceMid, 0), new Vector3(.5f, .9f, .8f), blue, root);
                 Cube("Fuel cell R", new Vector3(x, serviceMid, 0), new Vector3(.5f, .9f, .8f), blue, root);
             }
@@ -528,7 +566,7 @@ namespace SpaceMissionDesign.UI
             // --- Communications: high-gain dish on a mast ---
             if (Has(ComponentType.Communications))
             {
-                float x = ServiceD * .5f + .1f;
+                float x = stage1Width * .5f + .15f;
                 Cylinder("Comm mast", new Vector3(x, serviceMid + .7f, 0), .06f, 1.1f, grey, root);
                 Sphere("Comm dish", new Vector3(x + .35f, serviceMid + 1.25f, 0), new Vector3(1f, .35f, 1f), metal, root);
             }
@@ -536,70 +574,43 @@ namespace SpaceMissionDesign.UI
             // --- Thermal: radiator panels ---
             if (Has(ComponentType.Thermal))
             {
-                float x = ServiceD * .5f + .12f;
+                float x = stage1Width * .5f + .15f;
                 Cube("Radiator L", new Vector3(-x, serviceMid, 0), new Vector3(.12f, 1.4f, 1.1f), grey, root);
                 Cube("Radiator R", new Vector3(x, serviceMid, 0), new Vector3(.12f, 1.4f, 1.1f), grey, root);
             }
 
-            // --- Instruments ring around the top of stage 2 ---
+            // --- Instruments ring below the command module ---
             if (has && design.instruments.Count > 0)
             {
-                float y = Stage2Base + Stage2H - .9f;
-                float r = stage2Width * .5f + .14f;
+                float yInst = y - 28f;
+                float r = stage1Width * .5f + .14f;
                 for (int i = 0; i < design.instruments.Count; i++)
                 {
                     float a = i * Mathf.PI * 2f / Mathf.Max(1, design.instruments.Count);
-                    Cylinder("Instrument " + i, new Vector3(Mathf.Cos(a) * r, y, Mathf.Sin(a) * r),
+                    Cylinder("Instrument " + i, new Vector3(Mathf.Cos(a) * r, yInst, Mathf.Sin(a) * r),
                         .2f, .5f, gold, root);
                 }
             }
 
-            // --- Launch vehicle flavour: side boosters built from the tank model ---
+            // --- Launch vehicle flavour ---
             if (has && design.launchVehicle != null)
             {
                 string id = design.launchVehicle.vehicleId;
-                if (id == "lv_falcon_heavy" || id == "lv_delta_iv")
+                if (id == "lv_saturn_v")
                 {
-                    const float boosterH = 5.6f;
-                    float boosterWidth = boosterH / Mathf.Max(1f, Stage1H / Stage1D);
-                    if (tankPrefab != null)
-                    {
-                        // Measure one booster to get its real width, then mirror it.
-                        Transform first = PlaceModel(tankPrefab, root, new Vector3(-1f, Stage1Base + .2f, 0),
-                            boosterH, out var bs, 0f, white);
-                        boosterWidth = Mathf.Max(bs.x, bs.z);
-                        float offset = stage1Width * .5f + boosterWidth * .5f + .12f;
-                        if (first != null) first.localPosition = new Vector3(-offset, first.localPosition.y, 0f);
-                        PlaceModel(tankPrefab, root, new Vector3(offset, Stage1Base + .2f, 0), boosterH, 0f, white);
-                    }
-                    else
-                    {
-                        float offset = stage1Width * .5f + .7f;
-                        for (int s = -1; s <= 1; s += 2)
-                            Cylinder("Booster", new Vector3(s * offset, Stage1Base + boosterH * .5f + .2f, 0),
-                                .62f, boosterH, white, root);
-                    }
-                }
-                if (id == "lv_saturn_v" && enginePrefab == null)
-                {
-                    for (int i = 0; i < 5; i++)
-                    {
-                        float a = i * Mathf.PI * 2f / 5f;
-                        Cylinder("F1 nozzle", new Vector3(Mathf.Cos(a) * .9f, .4f, Mathf.Sin(a) * .9f), .34f, .7f, dark, root);
-                    }
+                    // Saturn V selected: the stack already IS a Saturn V. No extra parts needed.
                 }
             }
 
-            // Engine flame (hidden until liftoff).
-            var flameGO = Cylinder("Engine flame", new Vector3(0, -2.8f, 0), .9f, 5.2f, flameMat, root);
+            // Engine flame (hidden until liftoff) — sits at the base below S-IC bottom.
+            var flameGO = Cylinder("Engine flame", new Vector3(0, -3.4f, 0), 1.2f, 6f, flameMat, root);
             flame = flameGO.transform;
             flameBaseScale = flame.localScale;
             flame.gameObject.SetActive(false);
 
-            BuildExhaust(root, Mathf.Min(EngineH * .5f, 1.1f));
+            BuildExhaust(root, -3.4f);
 
             DontDestroyOnLoad(root.gameObject);
-            if (!usingModels) Debug.Log("Mission3DView: no models in Resources/Models, using primitive rocket.");
         }
 
         private void BuildExhaust(Transform root, float y)
