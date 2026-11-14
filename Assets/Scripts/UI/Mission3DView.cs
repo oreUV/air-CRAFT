@@ -20,8 +20,8 @@ namespace SpaceMissionDesign.UI
         private Vector3 flameBaseScale = Vector3.one;
         private Transform flame;
         private ParticleSystem exhaust;
-        private Vector3 focusHome = new Vector3(4f, 11.5f, 0f);
-        private Material white, metal, dark, gold, blue, grey, red, pad, earthMat, moonMat, flameMat;
+        private Vector3 focusHome = new Vector3(10f, 12f, 0f);
+        private Material white, metal, dark, gold, blue, grey, red, pad, flag, earthMat, moonMat, flameMat, exhaustMat;
 
         // Rocket stack layout (world units), shared by the model placement and decorations.
         // All heights scale the FBX models uniformly, so widths follow each part's own
@@ -50,14 +50,19 @@ namespace SpaceMissionDesign.UI
             Refresh(null);
         }
 
-        private Material Mat(string name, Color c, float metallic = .2f, float smooth = .45f, Color? emission = null)
+        private Material Mat(string name, Texture2D tex, Color? tint = null, float metallic = .2f, float smooth = .45f, Color? emission = null)
         {
             Shader s = Shader.Find("Standard");
             if (s == null) s = Shader.Find("Universal Render Pipeline/Lit");
             if (s == null) s = Shader.Find("Unlit/Color");
             var m = new Material(s) { name = name };
-            if (m.HasProperty("_Color")) m.SetColor("_Color", c);
-            if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
+            if (m.HasProperty("_MainTex")) m.SetTexture("_MainTex", tex);
+            if (m.HasProperty("_BaseMap")) m.SetTexture("_BaseMap", tex);
+            if (tint.HasValue)
+            {
+                if (m.HasProperty("_Color")) m.SetColor("_Color", tint.Value);
+                if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", tint.Value);
+            }
             if (m.HasProperty("_Metallic")) m.SetFloat("_Metallic", metallic);
             if (m.HasProperty("_Glossiness")) m.SetFloat("_Glossiness", smooth);
             if (emission.HasValue && m.HasProperty("_EmissionColor"))
@@ -70,17 +75,21 @@ namespace SpaceMissionDesign.UI
 
         private void BuildMaterials()
         {
-            white = Mat("Hull white", new Color(.86f, .88f, .90f), .25f, .5f);
-            metal = Mat("Metal", new Color(.55f, .58f, .62f), .65f, .7f);
-            dark = Mat("Dark", new Color(.12f, .13f, .15f), .4f, .5f);
-            gold = Mat("Gold", new Color(.85f, .62f, .22f), .7f, .65f);
-            blue = Mat("Blue", new Color(.20f, .35f, .62f), .3f, .5f);
-            grey = Mat("Grey", new Color(.38f, .40f, .43f), .35f, .4f);
-            red = Mat("Red", new Color(.65f, .22f, .18f), .3f, .5f);
-            pad = Mat("Pad", new Color(.13f, .14f, .16f), .1f, .3f);
-            earthMat = Mat("Earth", new Color(.12f, .32f, .62f), .05f, .35f, new Color(.02f, .08f, .18f));
-            moonMat = Mat("Moon", new Color(.62f, .62f, .60f), .02f, .2f);
-            flameMat = Mat("Flame", new Color(1f, .58f, .18f), 0f, .1f, new Color(1f, .45f, .08f) * 2.2f);
+            white = Mat("Hull white", TextureGenerator.WhitePaint(), tint: new Color(.92f, .94f, .97f), .2f, .5f);
+            metal = Mat("Metal", TextureGenerator.Metal(), tint: new Color(.6f, .64f, .68f), .7f, .75f);
+            dark = Mat("Dark", TextureGenerator.ThermalTiles(), tint: new Color(.18f, .18f, .19f), .35f, .45f);
+            gold = Mat("Gold", TextureGenerator.GoldFoil(), tint: new Color(.9f, .7f, .3f), .8f, .7f);
+            blue = Mat("Blue", TextureGenerator.Metal(), tint: new Color(.25f, .4f, .65f), .3f, .5f);
+            grey = Mat("Grey", TextureGenerator.Metal(), tint: new Color(.45f, .48f, .52f), .4f, .5f);
+            red = Mat("Red", TextureGenerator.Metal(), tint: new Color(.7f, .25f, .2f), .3f, .5f);
+            pad = Mat("Pad", TextureGenerator.Metal(), tint: new Color(.18f, .19f, .21f), .15f, .35f);
+            flag = Mat("Flag", TextureGenerator.Flag(), tint: Color.white, 0f, .3f);
+
+            earthMat = Mat("Earth", TextureGenerator.Earth(), tint: Color.white, .02f, .2f, new Color(.01f, .04f, .09f));
+            moonMat = Mat("Moon", TextureGenerator.Moon(), tint: Color.white, .02f, .15f);
+
+            flameMat = Mat("Flame", TextureGenerator.SoftDot(), tint: new Color(1f, .55f, .1f), 0f, .05f, new Color(1f, .4f, .05f) * 2.2f);
+            exhaustMat = Mat("Exhaust", TextureGenerator.SoftDot(), tint: new Color(1f, .7f, .3f), 0f, .05f);
         }
 
         private void BuildWorld()
@@ -95,14 +104,16 @@ namespace SpaceMissionDesign.UI
             sun.transform.rotation = Quaternion.Euler(48f, -35f, 0f);
             DontDestroyOnLoad(lightGO);
 
-            // Launch pad and ground.
+            // Launch pad and ground — this IS the Earth surface we stand on.
             Cylinder("Launch pad", new Vector3(10, -.5f, 0), 14f, .7f, pad, null);
             Cylinder("Pad ring", new Vector3(10, -.15f, 0), 8f, .35f, grey, null);
             Cylinder("Ground", new Vector3(10, -1.6f, 0), 90f, .4f, pad, null);
 
-            // Earth and Moon on the open (right) side of the screen.
-            Sphere("Earth", new Vector3(58, 36, 100), 18f, earthMat, null);
-            Sphere("Moon", new Vector3(86, 16, 112), 8f, moonMat, null);
+            // Earth below and behind the pad: fills the horizon at launch, recedes as we rise.
+            Sphere("Earth", new Vector3(10, -42f, -90f), 96f, earthMat, null);
+
+            // Moon ahead in the direction of flight, small at first, grows as we approach.
+            Sphere("Moon", new Vector3(10, 6f, 320f), 22f, moonMat, null);
 
             BuildStars();
         }
@@ -133,7 +144,7 @@ namespace SpaceMissionDesign.UI
             if (psShader == null) psShader = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
             if (psShader == null) psShader = Shader.Find("Sprites/Default");
             var psMat = new Material(psShader != null ? psShader : Shader.Find("Unlit/Color"));
-            psMat.mainTexture = SoftDotTexture();
+            psMat.mainTexture = TextureGenerator.SoftDot();
             if (psMat.HasProperty("_Color")) psMat.SetColor("_Color", new Color(.92f, .95f, 1f, 1f));
             var renderer = go.GetComponent<ParticleSystemRenderer>();
             renderer.material = psMat;
@@ -141,42 +152,6 @@ namespace SpaceMissionDesign.UI
             ps.Emit(1400);
 
             DontDestroyOnLoad(go);
-        }
-
-        private static Texture2D softDot;
-
-        /// <summary>
-        /// Radial white-to-transparent sprite used for stars and exhaust so the particles are
-        /// soft round dots instead of untextured squares.
-        /// </summary>
-        private static Texture2D SoftDotTexture()
-        {
-            if (softDot != null) return softDot;
-
-            const int size = 64;
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
-            {
-                name = "Soft Dot",
-                wrapMode = TextureWrapMode.Clamp
-            };
-
-            var pixels = new Color32[size * size];
-            float c = (size - 1) * .5f;
-            for (int y = 0; y < size; y++)
-            {
-                for (int x = 0; x < size; x++)
-                {
-                    float d = new Vector2(x - c, y - c).magnitude / c;
-                    float a = Mathf.Clamp01(1f - d);
-                    a *= a;
-                    pixels[y * size + x] = new Color32(255, 255, 255, (byte)(a * 255f));
-                }
-            }
-
-            tex.SetPixels32(pixels);
-            tex.Apply();
-            softDot = tex;
-            return tex;
         }
 
         private void BuildCamera()
@@ -205,9 +180,21 @@ namespace SpaceMissionDesign.UI
             if (orbit == null) orbit = cam.gameObject.AddComponent<OrbitCamera>();
             orbit.target = focus;
             orbit.minDistance = 14f;
-            orbit.maxDistance = 130f;
-            orbit.SetHomeDistance(40f);
+            orbit.maxDistance = 140f;
+            orbit.homeDistance = 40f;          // post-launch orbital distance
+            orbit.distance = 22f;              // start close, standing on the pad
+            orbit.targetDistance = 22f;
+            orbit.pitch = -25f;                // looking up at the rocket from the surface
+            orbit.yaw = 0f;
             cameraRig = orbit;
+
+            // Apply immediately so the first frame shows the surface view.
+            orbit.enabled = false;
+            var pivot = focus.position;
+            var rot = Quaternion.Euler(orbit.pitch, orbit.yaw, 0f);
+            cam.transform.position = pivot + rot * new Vector3(0f, 0f, -orbit.distance);
+            cam.transform.LookAt(pivot);
+            orbit.enabled = true;
         }
 
         // ---------------- model import ----------------
@@ -645,7 +632,7 @@ namespace SpaceMissionDesign.UI
             if (psShader == null) psShader = Shader.Find("Legacy Shaders/Particles/Additive");
             if (psShader == null) psShader = Shader.Find("Sprites/Default");
             var psMat = new Material(psShader != null ? psShader : Shader.Find("Unlit/Color"));
-            psMat.mainTexture = SoftDotTexture();
+            psMat.mainTexture = TextureGenerator.SoftDot();
             if (psMat.HasProperty("_Color")) psMat.SetColor("_Color", new Color(1f, .72f, .35f, .9f));
             var renderer = go.GetComponent<ParticleSystemRenderer>();
             renderer.material = psMat;
@@ -666,9 +653,20 @@ namespace SpaceMissionDesign.UI
         {
             launching = true;
             cameraRig?.ClearPan();
+
+            // Lock mouse input during the departure sequence.
+            if (cameraRig != null) cameraRig.departing = true;
+
             var root = rocketRoot;
             float t = 0f;
             float ignition = .55f;
+            float launchDuration = 4.5f;
+
+            // Camera departure: start on the surface looking up, end in orbit looking down at Earth.
+            float startDist = cameraRig != null ? cameraRig.distance : 22f;
+            float startPitch = cameraRig != null ? cameraRig.pitch : -25f;
+            float endDist = 62f;
+            float endPitch = 12f;
 
             if (flame != null) flame.gameObject.SetActive(true);
             if (exhaust != null)
@@ -677,12 +675,14 @@ namespace SpaceMissionDesign.UI
                 em.enabled = true;
             }
 
-            while (t < 3.6f)
+            while (t < launchDuration)
             {
                 t += Time.deltaTime;
                 if (root == null) yield break;
 
-                // Flicker the flame cone without resetting its base proportions.
+                float u = Mathf.Clamp01(t / launchDuration);
+
+                // Flicker the flame cone.
                 if (flame != null)
                 {
                     float flicker = 1f + Mathf.Sin(Time.time * 38f) * .12f;
@@ -692,14 +692,24 @@ namespace SpaceMissionDesign.UI
                 if (t > ignition)
                 {
                     float s = t - ignition;
-                    float speed = s * s * 5.2f + s * 3f;
+                    float speed = s * s * 4.6f + s * 2.6f;
                     root.position += Vector3.up * (speed * Time.deltaTime);
-                    root.Rotate(Vector3.up, 4f * Time.deltaTime, Space.World);
+                    root.Rotate(Vector3.up, 3f * Time.deltaTime, Space.World);
                 }
 
-                // Camera rides up with the vehicle.
-                if (focus != null)
-                    focus.position = Vector3.Lerp(focus.position, root.position + new Vector3(0f, 8f, 0f), Time.deltaTime * 2.2f);
+                // --- Camera departure ---
+                // Pull back from the surface while tilting down to watch Earth recede.
+                if (cameraRig != null)
+                {
+                    cameraRig.distance = Mathf.Lerp(startDist, endDist, u);
+                    cameraRig.targetDistance = cameraRig.distance;
+                    cameraRig.pitch = Mathf.Lerp(startPitch, endPitch, u);
+                    cameraRig.pitch = Mathf.Clamp(cameraRig.pitch, -20f, 85f);
+
+                    // Focus follows the vehicle up, slightly ahead of it.
+                    Vector3 focusTarget = root.position + new Vector3(0f, 6f, 0f);
+                    focus.position = Vector3.Lerp(focus.position, focusTarget, Time.deltaTime * 2.5f);
+                }
 
                 yield return null;
             }
@@ -710,7 +720,10 @@ namespace SpaceMissionDesign.UI
                 var em = exhaust.emission;
                 em.enabled = false;
             }
+
+            // Hand control back to the user.
             launching = false;
+            if (cameraRig != null) cameraRig.departing = false;
         }
 
         // ---------------- primitive helpers ----------------
@@ -785,10 +798,14 @@ namespace SpaceMissionDesign.UI
         [Tooltip("How far the view can be panned away from the target, in world units.")]
         public float maxPanDistance = 70f;
 
-        private float pitch = 5f;
-        private float yaw = 0f;
-        private float homeDistance = 46f;
-        private float targetDistance;
+        public float pitch = 5f;
+        public float yaw = 0f;
+
+        /// <summary>When true, mouse input is ignored and the camera is driven directly (launch departure).</summary>
+        public bool departing;
+
+        public float homeDistance = 46f;
+        public float targetDistance;
         private Vector3 panWanted;
         private Vector3 panApplied;
         private bool initialised;
@@ -812,61 +829,59 @@ namespace SpaceMissionDesign.UI
             Vector3 delta = mouse - lastMouse;
             lastMouse = mouse;
 
-            // ---------------- zoom ----------------
-            float scroll = Input.mouseScrollDelta.y;
-            if (Mathf.Abs(scroll) > .01f)
+            // During launch departure the camera is driven directly; ignore mouse input.
+            if (!departing)
             {
-                // Clamp per-frame so a big trackpad flick cannot invert or leap the zoom.
-                float factor = Mathf.Clamp(1f - scroll * zoomStep, .55f, 1.8f);
-                targetDistance = Mathf.Clamp(targetDistance * factor, minDistance, maxDistance);
-            }
-
-            // Exponential smoothing keeps the zoom frame-rate independent and smooth.
-            distance = Mathf.Lerp(distance, targetDistance, 1f - Mathf.Exp(-14f * dt));
-            if (Mathf.Abs(distance - targetDistance) < .002f) distance = targetDistance;
-
-            // ---------------- orbit ----------------
-            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-            if (Input.GetMouseButton(1) && !shift)
-            {
-                yaw += Input.GetAxis("Mouse X") * orbitSensitivity;
-                pitch -= Input.GetAxis("Mouse Y") * orbitSensitivity;
-            }
-
-            // ---------------- pan ----------------
-            // Left-drag only pans when the press started over the open 3D area, so the
-            // UI panel and its buttons keep working normally. Double-clicking that area
-            // recentres the view, which is the way back if you pan or zoom off into space.
-            if (Input.GetMouseButtonDown(0) && !shift && !PointerOverUI())
-            {
-                float now = Time.unscaledTime;
-                if (now - lastLeftClick < .28f)
+                // ---------------- zoom ----------------
+                float scroll = Input.mouseScrollDelta.y;
+                if (Mathf.Abs(scroll) > .01f)
                 {
-                    ResetView();
+                    float factor = Mathf.Clamp(1f - scroll * zoomStep, .55f, 1.8f);
+                    targetDistance = Mathf.Clamp(targetDistance * factor, minDistance, maxDistance);
                 }
-                else
+
+                // Exponential smoothing keeps the zoom frame-rate independent and smooth.
+                distance = Mathf.Lerp(distance, targetDistance, 1f - Mathf.Exp(-14f * dt));
+                if (Mathf.Abs(distance - targetDistance) < .002f) distance = targetDistance;
+
+                // ---------------- orbit ----------------
+                bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+                if (Input.GetMouseButton(1) && !shift)
                 {
-                    leftPan = true;
+                    yaw += Input.GetAxis("Mouse X") * orbitSensitivity;
+                    pitch -= Input.GetAxis("Mouse Y") * orbitSensitivity;
                 }
-                lastLeftClick = now;
+
+                // ---------------- pan ----------------
+                if (Input.GetMouseButtonDown(0) && !shift && !PointerOverUI())
+                {
+                    float now = Time.unscaledTime;
+                    if (now - lastLeftClick < .28f)
+                    {
+                        ResetView();
+                    }
+                    else
+                    {
+                        leftPan = true;
+                    }
+                    lastLeftClick = now;
+                }
+                if (Input.GetMouseButtonUp(0))
+                    leftPan = false;
+
+                bool panHeld = Input.GetMouseButton(2) ||
+                               (shift && (Input.GetMouseButton(0) || Input.GetMouseButton(1))) ||
+                               leftPan;
+
+                if (panHeld)
+                {
+                    float worldPerPixel = WorldUnitsPerPixel();
+                    panWanted -= (transform.right * delta.x + transform.up * delta.y) * worldPerPixel;
+                    panWanted = Vector3.ClampMagnitude(panWanted, maxPanDistance);
+                }
+
+                panApplied = Vector3.Lerp(panApplied, panWanted, 1f - Mathf.Exp(-20f * dt));
             }
-            if (Input.GetMouseButtonUp(0))
-                leftPan = false;
-
-            bool panHeld = Input.GetMouseButton(2) ||
-                           (shift && (Input.GetMouseButton(0) || Input.GetMouseButton(1))) ||
-                           leftPan;
-
-            if (panHeld)
-            {
-                // 1:1 "grab the world" panning: convert screen pixels into world units at the
-                // pivot's depth so the scene follows the cursor exactly at any zoom level.
-                float worldPerPixel = WorldUnitsPerPixel();
-                panWanted -= (transform.right * delta.x + transform.up * delta.y) * worldPerPixel;
-                panWanted = Vector3.ClampMagnitude(panWanted, maxPanDistance);
-            }
-
-            panApplied = Vector3.Lerp(panApplied, panWanted, 1f - Mathf.Exp(-20f * dt));
 
             // ---------------- apply ----------------
             pitch = Mathf.Clamp(pitch, -20f, 85f);
