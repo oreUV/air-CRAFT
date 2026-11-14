@@ -396,7 +396,8 @@ namespace SpaceMissionDesign.UI
         /// the part's top so the next part can be stacked directly above it.
         /// </summary>
         private float StackSaturnVPart(Dictionary<string, GameObject> parts, string name,
-            Transform parent, Vector3 at, float targetHeight, Material tint, float yaw = 0f)
+            Transform parent, Vector3 at, float targetHeight, Material tint, float yaw = 0f,
+            Vector3 extraEuler = default)
         {
             if (!parts.TryGetValue(name, out var prefab) || prefab == null) return at.y;
 
@@ -429,6 +430,10 @@ namespace SpaceMissionDesign.UI
             // --- Step 3: apply yaw (for fins around the stage) ---
             if (yaw != 0f)
                 go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * go.transform.localRotation;
+
+            // --- Step 3b: apply any per-part extra rotation (e.g. flip S-IC bottom upside down) ---
+            if (extraEuler != Vector3.zero)
+                go.transform.localRotation = Quaternion.Euler(extraEuler) * go.transform.localRotation;
 
             // Re-measure after all rotations.
             TryLocalBounds(go, parent, out bounds);
@@ -551,6 +556,13 @@ namespace SpaceMissionDesign.UI
                 {"escape tower", 1.4f},
             };
 
+            // --- Per-part extra rotation (degrees) applied after orientation ---
+            // S-IC bottom's nozzle bells point up in the source mesh; flip it so they point down.
+            var partExtraEuler = new Dictionary<string, Vector3>
+            {
+                {"S-IC bottom", new Vector3(180f, 0f, 0f)},
+            };
+
             // --- Stack the Saturn V from bottom to top ---
             float y = 0f;
             float stage1Width = 5.4f; // fallback
@@ -581,7 +593,8 @@ namespace SpaceMissionDesign.UI
                 float s0h = partTargetHeight["S-IC bottom"] / Mathf.Max(b0.size.y, .0001f);
                 stage1Width = Mathf.Max(b0.size.x, b0.size.z) * s0h;
 
-                y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), partTargetHeight["S-IC bottom"], white);
+                y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), partTargetHeight["S-IC bottom"], white,
+                    extraEuler: partExtraEuler["S-IC bottom"]);
                 y = StackSaturnVPart(parts, "S-IC top", root, new Vector3(0, y, 0), partTargetHeight["S-IC top"], metal);
                 y = StackSaturnVPart(parts, "S-IC joining cube", root, new Vector3(0, y, 0), partTargetHeight["S-IC joining cube"], dark);
                 y = StackSaturnVPart(parts, "stage 1-2 coupler", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler"], grey);
