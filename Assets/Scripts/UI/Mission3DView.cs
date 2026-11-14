@@ -236,7 +236,7 @@ namespace SpaceMissionDesign.UI
 
             // The FBX axis conversion is inconsistent between Blender and Unity's importer,
             // so orientation is normalised here from the mesh itself instead of trusting it.
-            var upright = UprightRotation(bounds.size);
+            var upright = AxisToUpRotation(bounds.size);
             if (upright != Quaternion.identity)
             {
                 go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * upright;
@@ -271,25 +271,6 @@ namespace SpaceMissionDesign.UI
                 foreach (var r in go.GetComponentsInChildren<Renderer>()) r.sharedMaterial = tint;
 
             return go.transform;
-        }
-
-        /// <summary>
-        /// Returns the rotation needed to stand a model up, given its current bounds.
-        /// Models exported with the long axis on X or Z are rotated so that axis becomes +Y.
-        /// Already-upright models get identity, which makes this safe to run every refresh.
-        /// </summary>
-        private static Quaternion UprightRotation(Vector3 size)
-        {
-            float longest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
-
-            // Within a few percent of the vertical dimension: leave it alone.
-            if (longest <= size.y * 1.03f) return Quaternion.identity;
-
-            // Lying along X: +X becomes +Y, so -X (the wide end) ends up pointing down.
-            if (size.x >= size.z) return Quaternion.Euler(0f, 0f, 90f);
-
-            // Lying along Z: +Z becomes +Y, -Z points down.
-            return Quaternion.Euler(-90f, 0f, 0f);
         }
 
         /// <summary>
@@ -430,22 +411,23 @@ namespace SpaceMissionDesign.UI
 
             if (!TryLocalBounds(go, parent, out var bounds)) return at.y;
 
-            // --- Orient the part upright from its mesh, not from the FBX axis conversion ---
-            var upright = UprightRotation(bounds.size);
+            // --- Step 1: stand the part up (longest axis -> +Y) ---
+            var upright = AxisToUpRotation(bounds.size);
             if (upright != Quaternion.identity)
             {
                 go.transform.localRotation = upright;
                 if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
             }
 
-            // Keep the wide end (nozzle / base) pointing down.
+            // --- Step 2: make sure the wide end (nozzle / base) points DOWN ---
             if (WideEndIsUp(go))
             {
+                // Flip upside down: rotate 180° around the X axis in world space.
                 go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
                 if (TryLocalBounds(go, parent, out var flipped)) bounds = flipped;
             }
 
-            // Apply yaw (for fins around the stage) after the part is upright.
+            // --- Step 3: apply yaw (for fins around the stage) ---
             if (yaw != 0f)
                 go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * go.transform.localRotation;
 
@@ -468,6 +450,27 @@ namespace SpaceMissionDesign.UI
         }
 
         /// <summary>
+        /// Returns a rotation that maps the longest axis of <paramref name="size"/> to +Y.
+        /// If Y is already the longest axis, returns identity.
+        /// </summary>
+        private static Quaternion AxisToUpRotation(Vector3 size)
+        {
+            float longest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+            if (longest <= size.y * 1.03f) return Quaternion.identity;
+
+            if (size.x >= size.z)
+            {
+                // Longest on X: +X -> +Y (rotate around Z by +90°)
+                return Quaternion.Euler(0f, 0f, 90f);
+            }
+            else
+            {
+                // Longest on Z: +Z -> +Y (rotate around X by -90°)
+                return Quaternion.Euler(-90f, 0f, 0f);
+            }
+        }
+
+        /// <summary>
         /// Orient-aware height of a part: rotates it upright, then reports the Y extent.
         /// </summary>
         private float OrientedHeight(GameObject prefab, Transform space)
@@ -484,7 +487,7 @@ namespace SpaceMissionDesign.UI
             float h = 0f;
             if (TryLocalBounds(go, space, out var bounds))
             {
-                var upright = UprightRotation(bounds.size);
+                var upright = AxisToUpRotation(bounds.size);
                 if (upright != Quaternion.identity)
                 {
                     go.transform.localRotation = upright;
@@ -558,7 +561,7 @@ namespace SpaceMissionDesign.UI
                 foreach (var anim in go0.GetComponentsInChildren<Animator>()) Destroy(anim);
                 if (TryLocalBounds(go0, root, out var b0))
                 {
-                    var up0 = UprightRotation(b0.size);
+                    var up0 = AxisToUpRotation(b0.size);
                     if (up0 != Quaternion.identity)
                     {
                         go0.transform.localRotation = up0;
