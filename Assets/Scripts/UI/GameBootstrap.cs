@@ -189,6 +189,11 @@ namespace SpaceMissionDesign.UI
             var panelImg = panel.gameObject.AddComponent<Image>();
             panelImg.color = new Color(.02f, .035f, .07f, .55f);
             panelImg.raycastTarget = false;
+
+            // Camera control hint on the 3D side of the screen.
+            NewText(parent, "Right-drag to orbit  ·  Scroll to zoom", 15,
+                new Vector2(480f, -470f), new Vector2(880f, 30f), TextAnchor.MiddleCenter,
+                new Color(.55f, .68f, .86f));
         }
 
         private void BeginScreen(string title, string subtitle = null)

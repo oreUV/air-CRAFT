@@ -16,7 +16,7 @@ namespace SpaceMissionDesign.UI
         private Transform focus;
         private Transform flame;
         private ParticleSystem exhaust;
-        private Vector3 focusHome = new Vector3(4f, 8.5f, 0f);
+        private Vector3 focusHome = new Vector3(4f, 9.2f, 0f);
         private Material white, metal, dark, gold, blue, grey, red, pad, earthMat, moonMat, flameMat;
 
         public void Initialize()
@@ -152,7 +152,7 @@ namespace SpaceMissionDesign.UI
             launching = false;
             if (focus != null) focus.position = focusHome;
             var root = new GameObject("Rocket").transform;
-            root.position = new Vector3(7f, .1f, 0f);
+            root.position = new Vector3(7f, 1.0f, 0f);
             rocketRoot = root;
 
             // Core stack.
@@ -411,7 +411,7 @@ namespace SpaceMissionDesign.UI
         public float minDistance = 12f;
         public float maxDistance = 70f;
 
-        private float pitch = 8f;
+        private float pitch = 5f;
         private float yaw = 0f;
 
         private void LateUpdate()
