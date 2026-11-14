@@ -1,85 +1,57 @@
 # Rocket Models
 
-These FBX files are the spacecraft parts used by the 3D view (`Mission3DView.cs`).
-They are loaded at runtime with:
+Two sets of models live in this folder:
 
-```csharp
-Resources.Load<GameObject>("Models/cockpit");
-Resources.Load<GameObject>("Models/fueltank1");
-Resources.Load<GameObject>("Models/thruster1");
-```
+## 1. Saturn V parts (currently used by the game)
 
-If a file is missing the game falls back to a primitive-built rocket, so the scene
-always renders.
+`Mission3DView.cs` assembles the actual Saturn V rocket from parts baked from
+`C:\Users\vaish\Downloads\Saturn V Rocket\` (STL files). They live in
+`Assets/Resources/Models/SaturnV/`:
 
-## Source of truth
+| Part file                  | Role in the stack |
+|----------------------------|-------------------|
+| `S-IC bottom`              | First-stage base (largest diameter) |
+| `S-IC top`                 | First-stage upper section |
+| `S-IC joining cube`        | Small connector between S-IC sections |
+| `stage 1-2 coupler`        | Interstage connector |
+| `S-II`                     | Second stage |
+| `S-IV b`                   | Third stage |
+| `service module`           | Instrument unit / service module |
+| `lem shroud`               | Lunar module shroud |
+| `command moduel`           | Command module (capsule) — note the source filename's spelling |
+| `escape tower`             | Launch escape tower on top |
+| `fin (print 4)`            | Four fins around the first stage |
 
-The original user-supplied meshes live outside the repo at
-`C:\Users\vaish\Downloads\models\`. They are Tripo-generated meshes exported from
-Blender, each a single mesh with the shared material
-`tripo_9a69999c_f4f5_4143_bba6_bcee0b57bc2c`.
+Parts are baked by `Tools/blender_bake_saturnv.py`, which parses each STL
+(Blender 5.1 has no built-in STL importer, so triangles are read manually),
+stands the part up on its principal axis, flips the wide end down, moves the
+pivot to bottom-centre, and exports as Y-up FBX.
 
-The copies in this folder are **baked** by `Tools/blender_bake_models.py`, which
-makes them predictable for the game:
+## 2. Tripo models (kept aside, not used)
 
-| Model        | Role in the stack          | Notes |
-|--------------|----------------------------|-------|
-| `cockpit`    | Command module (capsule)   | Conical crew capsule |
-| `fueltank1`  | Propellant tanks / boosters| Tall cylindrical stage |
-| `thruster1`  | Engine cluster             | Aligned by principal axis, nozzle down |
+`cockpit.fbx`, `fueltank1.fbx`, `thruster1.fbx` are the original Tripo-generated
+meshes from `C:\Users\vaish\Downloads\models\`. They remain in this folder but
+are **no longer loaded by the game** — the Saturn V stack replaced them. They are
+kept as a fallback reference and in case you want to switch back.
 
-## What the bake does
+## Runtime assembly
 
-Run it with Blender 5.1+:
+`Mission3DView.StackSaturnVPart()` loads each Saturn V prefab, applies a global
+scale so the full vehicle is ~28 units tall, and stacks them bottom to top with
+bottom-centre alignment. Four `fin (print 4)` parts are placed around the first
+stage. If the SaturnV folder is missing or empty, the game falls back to
+primitive cylinders and spheres.
+
+## Re-baking the Saturn V parts
 
 ```powershell
-& "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" -b -P "Tools\blender_bake_models.py"
+& "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" -b -P "Tools\blender_bake_saturnv.py"
 ```
 
-For every model the script:
+Blender exits with code 1 after a successful run; that is normal.
 
-1. Imports the source FBX and joins all mesh objects.
-2. Applies all transforms.
-3. For `thruster1`, rotates the mesh about its principal axis so the bell stands upright.
-4. Flips the model if needed so the **widest end points down** (heat shield / tank base / nozzle).
-5. Moves the pivot to the **bottom-centre** of the bounding box.
-6. Exports with Unity axes (`axis_forward='-Z'`, `axis_up='Y'`) into this folder.
+## Replacing a part
 
-Blender exits with code 1 after a successful run; that is normal and the
-`BAKE_SUMMARY` block printed at the end shows the exported bounds.
-
-## Runtime scaling
-
-The bake only standardises orientation and pivot. `Mission3DView.PlaceModel`
-still measures each prefab's renderer bounds at runtime and rescales it to the
-height/width the assembly asks for, then re-anchors bottom-centre. That means a
-re-exported or replacement model with a different import scale will still stack
-correctly without code changes.
-
-## Runtime orientation normalisation
-
-Blender's FBX axis settings and Unity's importer do not always agree: the models
-in this folder came back from the importer lying on their side even though they
-were exported Y-up. Rather than depend on that agreement, `PlaceModel` fixes
-orientation itself:
-
-1. Measure the mesh bounds.
-2. If the longest axis is X or Z, rotate it so that axis becomes +Y
-   (`UprightRotation`). Models that are already tallest along Y are left alone,
-   so this is safe to run on every refresh.
-3. Compare how wide the mesh is at its bottom and top 18% (`WideEndIsUp`). If the
-   wide end is up — a heat shield pointing skyward, a nozzle bell pointing up —
-   the part is turned over in parent space. This is why the meshes are imported
-   with `isReadable: 1`: the check needs vertex positions.
-
-If vertex data is unavailable the step is skipped and the bake convention
-(wide end down) is assumed, so the models still stand upright.
-
-Because both steps derive from the mesh, they also protect against a future
-model being exported with a different axis convention.
-
-## Replacing a model
-
-1. Drop the new FBX into `C:\Users\vaish\Downloads\models\` using the same filename.
+1. Drop a new STL into `C:\Users\vaish\Downloads\Saturn V Rocket\` using the same filename.
 2. Re-run the bake command above.
 3. In Unity, press Play — no scene or prefab wiring is required.
