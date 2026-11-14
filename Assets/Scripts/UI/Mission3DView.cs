@@ -166,13 +166,27 @@ namespace SpaceMissionDesign.UI
         // ---------------- model import ----------------
 
         /// <summary>
-        /// Instantiates a model prefab from Resources/Models, scales it to the requested
-        /// height/width and aligns its bottom-centre to <paramref name="at"/> (local space).
+        /// Instantiates a model prefab from Resources/Models, scales it uniformly so it is
+        /// <paramref name="height"/> tall, and aligns its bottom-centre to
+        /// <paramref name="at"/> (parent local space). Scaling is uniform so the supplied
+        /// meshes keep their real proportions.
         /// Returns null when the asset is missing so callers can fall back to primitives.
         /// </summary>
         private Transform PlaceModel(GameObject prefab, Transform parent, Vector3 at,
-            float height, float width, float yaw = 0f, Material tint = null)
+            float height, float yaw = 0f, Material tint = null)
         {
+            return PlaceModel(prefab, parent, at, height, out _, yaw, tint);
+        }
+
+        /// <summary>
+        /// As above, also reporting the placed height/width/depth in parent space so callers
+        /// that arrange several parts (engine clusters, boosters) can space them correctly
+        /// no matter what proportions the supplied model has.
+        /// </summary>
+        private Transform PlaceModel(GameObject prefab, Transform parent, Vector3 at,
+            float height, out Vector3 placedSize, float yaw = 0f, Material tint = null)
+        {
+            placedSize = Vector3.zero;
             if (prefab == null) return null;
 
             var go = Instantiate(prefab, parent);
@@ -187,10 +201,9 @@ namespace SpaceMissionDesign.UI
             if (!TryLocalBounds(go, parent, out var bounds)) return go.transform;
 
             float h = Mathf.Max(bounds.size.y, .0001f);
-            float w = Mathf.Max(bounds.size.x, bounds.size.z);
-            w = Mathf.Max(w, .0001f);
 
-            var scale = new Vector3(width / w, height / h, width / w);
+            // Uniform scale: the prefab's own height/width ratio is preserved.
+            var scale = Vector3.one * (height / h);
             go.transform.localScale = scale;
 
             // Scaling happens about the object's own origin, so the parent-space bounds
@@ -200,6 +213,7 @@ namespace SpaceMissionDesign.UI
             Vector3 centre = (min + max) * .5f;
 
             go.transform.localPosition = at - new Vector3(centre.x, min.y, centre.z);
+            placedSize = max - min;
 
             if (tint != null)
                 foreach (var r in go.GetComponentsInChildren<Renderer>()) r.sharedMaterial = tint;
@@ -249,10 +263,13 @@ namespace SpaceMissionDesign.UI
             bool usingModels = tankPrefab != null || capsulePrefab != null || enginePrefab != null;
 
             // --- Stages (fueltank1) ---
+            float stage1Width = Stage1D, stage2Width = Stage2D;
             if (tankPrefab != null)
             {
-                PlaceModel(tankPrefab, root, new Vector3(0, Stage1Base, 0), Stage1H, Stage1D, 0f, white);
-                PlaceModel(tankPrefab, root, new Vector3(0, Stage2Base, 0), Stage2H, Stage2D, 0f, metal);
+                PlaceModel(tankPrefab, root, new Vector3(0, Stage1Base, 0), Stage1H, out var s1, 0f, white);
+                stage1Width = Mathf.Max(s1.x, s1.z);
+                PlaceModel(tankPrefab, root, new Vector3(0, Stage2Base, 0), Stage2H, out var s2, 0f, metal);
+                stage2Width = Mathf.Max(s2.x, s2.z);
             }
             else
             {
@@ -267,7 +284,7 @@ namespace SpaceMissionDesign.UI
             // --- Command module (cockpit) ---
             bool capsulePlaced = false;
             if (capsulePrefab != null)
-                capsulePlaced = PlaceModel(capsulePrefab, root, new Vector3(0, CapsuleBase, 0), CapsuleH, CapsuleD, 0f, white) != null;
+                capsulePlaced = PlaceModel(capsulePrefab, root, new Vector3(0, CapsuleBase, 0), CapsuleH, 0f, white) != null;
             if (!capsulePlaced)
                 Sphere("Command module", new Vector3(0, CapsuleBase + CapsuleH * .45f, 0), CapsuleD, white, root);
 
@@ -283,17 +300,24 @@ namespace SpaceMissionDesign.UI
                 return false;
             }
 
-            // --- Engines (thruster1): centre bell plus a ring of four ---
+            // --- Engines (thruster1): centre bell plus a ring of four, spaced from real bounds ---
             if (!has || Has(ComponentType.Propulsion))
             {
                 if (enginePrefab != null)
                 {
-                    PlaceModel(enginePrefab, root, new Vector3(0, 0, 0), EngineH, 1.9f, 0f, dark);
+                    PlaceModel(enginePrefab, root, Vector3.zero, EngineH, out var mainBell, 0f, dark);
+                    float mainRadius = Mathf.Max(mainBell.x, mainBell.z) * .5f;
+
+                    // Scaling is uniform, so a shorter bell has proportionally the same width.
+                    const float bellH = 1.35f;
+                    float smallRadius = mainRadius * (bellH / EngineH);
+                    float ring = Mathf.Max(mainRadius + smallRadius * .85f, .45f);
+
                     for (int i = 0; i < 4; i++)
                     {
                         float a = i * Mathf.PI * .5f + .4f;
                         PlaceModel(enginePrefab, root,
-                            new Vector3(Mathf.Cos(a) * 1.05f, 0, Mathf.Sin(a) * 1.05f), EngineH * .6f, 1.05f, 0f, grey);
+                            new Vector3(Mathf.Cos(a) * ring, 0, Mathf.Sin(a) * ring), bellH, 0f, grey);
                     }
                 }
                 else
@@ -310,10 +334,11 @@ namespace SpaceMissionDesign.UI
             // --- Structure: external struts ---
             if (Has(ComponentType.Structure))
             {
+                float r = stage1Width * .5f + .09f;
                 for (int i = 0; i < 4; i++)
                 {
                     float a = i * Mathf.PI * .5f;
-                    Cylinder("Strut", new Vector3(Mathf.Cos(a) * (Stage1D * .5f + .08f), Stage1Base + Stage1H * .45f, Mathf.Sin(a) * (Stage1D * .5f + .08f)),
+                    Cylinder("Strut", new Vector3(Mathf.Cos(a) * r, Stage1Base + Stage1H * .45f, Mathf.Sin(a) * r),
                         .08f, Stage1H * .8f, grey, root);
                 }
             }
@@ -323,32 +348,36 @@ namespace SpaceMissionDesign.UI
             // --- Power: fuel-cell boxes on the service module ---
             if (Has(ComponentType.Power))
             {
-                Cube("Fuel cell L", new Vector3(-1.5f, serviceMid, 0), new Vector3(.5f, .9f, .8f), blue, root);
-                Cube("Fuel cell R", new Vector3(1.5f, serviceMid, 0), new Vector3(.5f, .9f, .8f), blue, root);
+                float x = ServiceD * .5f + .18f;
+                Cube("Fuel cell L", new Vector3(-x, serviceMid, 0), new Vector3(.5f, .9f, .8f), blue, root);
+                Cube("Fuel cell R", new Vector3(x, serviceMid, 0), new Vector3(.5f, .9f, .8f), blue, root);
             }
 
             // --- Communications: high-gain dish on a mast ---
             if (Has(ComponentType.Communications))
             {
-                Cylinder("Comm mast", new Vector3(1.6f, serviceMid + .7f, 0), .06f, 1.1f, grey, root);
-                Sphere("Comm dish", new Vector3(1.95f, serviceMid + 1.25f, 0), new Vector3(1f, .35f, 1f), metal, root);
+                float x = ServiceD * .5f + .1f;
+                Cylinder("Comm mast", new Vector3(x, serviceMid + .7f, 0), .06f, 1.1f, grey, root);
+                Sphere("Comm dish", new Vector3(x + .35f, serviceMid + 1.25f, 0), new Vector3(1f, .35f, 1f), metal, root);
             }
 
             // --- Thermal: radiator panels ---
             if (Has(ComponentType.Thermal))
             {
-                Cube("Radiator L", new Vector3(-1.6f, serviceMid, 0), new Vector3(.12f, 1.4f, 1.1f), grey, root);
-                Cube("Radiator R", new Vector3(1.6f, serviceMid, 0), new Vector3(.12f, 1.4f, 1.1f), grey, root);
+                float x = ServiceD * .5f + .12f;
+                Cube("Radiator L", new Vector3(-x, serviceMid, 0), new Vector3(.12f, 1.4f, 1.1f), grey, root);
+                Cube("Radiator R", new Vector3(x, serviceMid, 0), new Vector3(.12f, 1.4f, 1.1f), grey, root);
             }
 
             // --- Instruments ring around the top of stage 2 ---
             if (has && design.instruments.Count > 0)
             {
                 float y = Stage2Base + Stage2H - .9f;
+                float r = stage2Width * .5f + .14f;
                 for (int i = 0; i < design.instruments.Count; i++)
                 {
                     float a = i * Mathf.PI * 2f / Mathf.Max(1, design.instruments.Count);
-                    Cylinder("Instrument " + i, new Vector3(Mathf.Cos(a) * (Stage2D * .5f + .12f), y, Mathf.Sin(a) * (Stage2D * .5f + .12f)),
+                    Cylinder("Instrument " + i, new Vector3(Mathf.Cos(a) * r, y, Mathf.Sin(a) * r),
                         .2f, .5f, gold, root);
                 }
             }
@@ -359,12 +388,24 @@ namespace SpaceMissionDesign.UI
                 string id = design.launchVehicle.vehicleId;
                 if (id == "lv_falcon_heavy" || id == "lv_delta_iv")
                 {
-                    for (int s = -1; s <= 1; s += 2)
+                    const float boosterH = 5.6f;
+                    float boosterWidth = boosterH / Mathf.Max(1f, Stage1H / Stage1D);
+                    if (tankPrefab != null)
                     {
-                        if (tankPrefab != null)
-                            PlaceModel(tankPrefab, root, new Vector3(s * 2.35f, Stage1Base + .2f, 0), 6.4f, 1.25f, 0f, white);
-                        else
-                            Cylinder("Booster", new Vector3(s * 2.35f, Stage1Base + 3.2f, 0), .62f, 6.4f, white, root);
+                        // Measure one booster to get its real width, then mirror it.
+                        Transform first = PlaceModel(tankPrefab, root, new Vector3(-1f, Stage1Base + .2f, 0),
+                            boosterH, out var bs, 0f, white);
+                        boosterWidth = Mathf.Max(bs.x, bs.z);
+                        float offset = stage1Width * .5f + boosterWidth * .5f + .12f;
+                        if (first != null) first.localPosition = new Vector3(-offset, first.localPosition.y, 0f);
+                        PlaceModel(tankPrefab, root, new Vector3(offset, Stage1Base + .2f, 0), boosterH, 0f, white);
+                    }
+                    else
+                    {
+                        float offset = stage1Width * .5f + .7f;
+                        for (int s = -1; s <= 1; s += 2)
+                            Cylinder("Booster", new Vector3(s * offset, Stage1Base + boosterH * .5f + .2f, 0),
+                                .62f, boosterH, white, root);
                     }
                 }
                 if (id == "lv_saturn_v" && enginePrefab == null)
@@ -378,7 +419,7 @@ namespace SpaceMissionDesign.UI
             }
 
             // Engine flame (hidden until liftoff).
-            var flameGO = Cylinder("Engine flame", new Vector3(0, -1.7f, 0), .85f, 3.4f, flameMat, root);
+            var flameGO = Cylinder("Engine flame", new Vector3(0, -1.7f, 0), .62f, 3.4f, flameMat, root);
             flame = flameGO.transform;
             flame.gameObject.SetActive(false);
 
