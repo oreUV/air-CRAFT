@@ -24,18 +24,20 @@ namespace SpaceMissionDesign.UI
         private Material white, metal, dark, gold, blue, grey, red, pad, earthMat, moonMat, flameMat;
 
         // Rocket stack layout (world units), shared by the model placement and decorations.
-        private const float EngineH = 2.2f;
-        private const float Stage1H = 9.0f;
-        private const float Stage2H = 6.4f;
-        private const float Stage1D = 3.4f;
-        private const float Stage2D = 2.6f;
-        private const float ServiceH = 1.6f;
-        private const float ServiceD = 2.1f;
-        private const float CapsuleH = 2.8f;
-        private const float CapsuleD = 2.4f;
+        // All heights scale the FBX models uniformly, so widths follow each part's own
+        // proportions — these constants only position things around the models.
+        private const float EngineH = 3.5f;
+        private const float Stage1H = 14.4f;
+        private const float Stage2H = 10.2f;
+        private const float Stage1D = 5.4f;
+        private const float Stage2D = 4.2f;
+        private const float ServiceH = 2.5f;
+        private const float ServiceD = 3.4f;
+        private const float CapsuleH = 4.5f;
+        private const float CapsuleD = 3.8f;
         private const float Stage1Base = EngineH;
-        private const float Stage2Base = Stage1Base + Stage1H - 1.2f;
-        private const float ServiceBase = Stage2Base + Stage2H - .4f;
+        private const float Stage2Base = Stage1Base + Stage1H - 1.8f;
+        private const float ServiceBase = Stage2Base + Stage2H - .6f;
         private const float CapsuleBase = ServiceBase + ServiceH - .1f;
         private const float StackTop = CapsuleBase + CapsuleH;
 
@@ -75,7 +77,7 @@ namespace SpaceMissionDesign.UI
             blue = Mat("Blue", new Color(.20f, .35f, .62f), .3f, .5f);
             grey = Mat("Grey", new Color(.38f, .40f, .43f), .35f, .4f);
             red = Mat("Red", new Color(.65f, .22f, .18f), .3f, .5f);
-            pad = Mat("Pad", new Color(.22f, .23f, .25f), .1f, .3f);
+            pad = Mat("Pad", new Color(.13f, .14f, .16f), .1f, .3f);
             earthMat = Mat("Earth", new Color(.12f, .32f, .62f), .05f, .35f, new Color(.02f, .08f, .18f));
             moonMat = Mat("Moon", new Color(.62f, .62f, .60f), .02f, .2f);
             flameMat = Mat("Flame", new Color(1f, .58f, .18f), 0f, .1f, new Color(1f, .45f, .08f) * 2.2f);
@@ -88,15 +90,15 @@ namespace SpaceMissionDesign.UI
             var lightGO = new GameObject("Sun");
             var sun = lightGO.AddComponent<Light>();
             sun.type = LightType.Directional;
-            sun.intensity = 1.25f;
+            sun.intensity = 1.05f;
             sun.color = new Color(1f, .97f, .90f);
             sun.transform.rotation = Quaternion.Euler(48f, -35f, 0f);
             DontDestroyOnLoad(lightGO);
 
             // Launch pad and ground.
-            Cylinder("Launch pad", new Vector3(6, -.35f, 0), 11f, .5f, pad, null);
-            Cylinder("Pad ring", new Vector3(6, -.05f, 0), 6.2f, .25f, grey, null);
-            Cylinder("Ground", new Vector3(6, -1.2f, 0), 70f, .3f, pad, null);
+            Cylinder("Launch pad", new Vector3(10, -.5f, 0), 14f, .7f, pad, null);
+            Cylinder("Pad ring", new Vector3(10, -.15f, 0), 8f, .35f, grey, null);
+            Cylinder("Ground", new Vector3(10, -1.6f, 0), 90f, .4f, pad, null);
 
             // Earth and Moon on the open (right) side of the screen.
             Sphere("Earth", new Vector3(58, 36, 100), 18f, earthMat, null);
@@ -113,27 +115,68 @@ namespace SpaceMissionDesign.UI
             var main = ps.main;
             main.startSpeed = 0f;
             main.startLifetime = 9999f;
-            main.startSize = new ParticleSystem.MinMaxCurve(.22f, .7f);
+            main.startSize = new ParticleSystem.MinMaxCurve(.6f, 1.8f);
             main.maxParticles = 1400;
             main.simulationSpace = ParticleSystemSimulationSpace.World;
             main.gravityModifier = 0f;
             var emission = ps.emission;
             emission.enabled = false;
+
+            // A thin shell, not a solid ball: stars were previously spawning a few units from
+            // the camera and rendering as big hard squares.
             var shape = ps.shape;
-            shape.shapeType = ParticleSystemShapeType.Sphere;
-            shape.radius = 160f;
+            shape.shapeType = ParticleSystemShapeType.SphereShell;
+            shape.radius = 200f;
+            shape.radiusThickness = .06f;
 
             Shader psShader = Shader.Find("Particles/Standard Unlit");
             if (psShader == null) psShader = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
             if (psShader == null) psShader = Shader.Find("Sprites/Default");
             var psMat = new Material(psShader != null ? psShader : Shader.Find("Unlit/Color"));
-            psMat.color = new Color(.92f, .95f, 1f);
+            psMat.mainTexture = SoftDotTexture();
+            if (psMat.HasProperty("_Color")) psMat.SetColor("_Color", new Color(.92f, .95f, 1f, 1f));
             var renderer = go.GetComponent<ParticleSystemRenderer>();
             renderer.material = psMat;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
             ps.Emit(1400);
 
             DontDestroyOnLoad(go);
+        }
+
+        private static Texture2D softDot;
+
+        /// <summary>
+        /// Radial white-to-transparent sprite used for stars and exhaust so the particles are
+        /// soft round dots instead of untextured squares.
+        /// </summary>
+        private static Texture2D SoftDotTexture()
+        {
+            if (softDot != null) return softDot;
+
+            const int size = 64;
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                name = "Soft Dot",
+                wrapMode = TextureWrapMode.Clamp
+            };
+
+            var pixels = new Color32[size * size];
+            float c = (size - 1) * .5f;
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float d = new Vector2(x - c, y - c).magnitude / c;
+                    float a = Mathf.Clamp01(1f - d);
+                    a *= a;
+                    pixels[y * size + x] = new Color32(255, 255, 255, (byte)(a * 255f));
+                }
+            }
+
+            tex.SetPixels32(pixels);
+            tex.Apply();
+            softDot = tex;
+            return tex;
         }
 
         private void BuildCamera()
@@ -163,7 +206,7 @@ namespace SpaceMissionDesign.UI
             orbit.target = focus;
             orbit.minDistance = 14f;
             orbit.maxDistance = 130f;
-            orbit.SetHomeDistance(46f);
+            orbit.SetHomeDistance(40f);
             cameraRig = orbit;
         }
 
@@ -385,7 +428,7 @@ namespace SpaceMissionDesign.UI
             if (focus != null) focus.position = focusHome;
 
             var root = new GameObject("Rocket").transform;
-            root.position = new Vector3(7f, 1.0f, 0f);
+            root.position = new Vector3(10f, .18f, 0f);
             rocketRoot = root;
 
             var tankPrefab = Resources.Load<GameObject>("Models/fueltank1");
@@ -436,20 +479,31 @@ namespace SpaceMissionDesign.UI
             {
                 if (enginePrefab != null)
                 {
-                    PlaceModel(enginePrefab, root, Vector3.zero, EngineH, out var mainBell, 0f, dark);
+                    PlaceModel(enginePrefab, root, Vector3.zero, EngineH, out var mainBell, 0f, metal);
                     float mainRadius = Mathf.Max(mainBell.x, mainBell.z) * .5f;
 
                     // Scaling is uniform, so a shorter bell has proportionally the same width.
-                    const float bellH = 1.35f;
+                    const float bellH = 1.5f;
                     float smallRadius = mainRadius * (bellH / EngineH);
-                    float ring = Mathf.Max(mainRadius + smallRadius * .85f, .45f);
+                    float ring = Mathf.Max(mainRadius + smallRadius * .9f, .45f);
 
                     for (int i = 0; i < 4; i++)
                     {
                         float a = i * Mathf.PI * .5f + .4f;
                         PlaceModel(enginePrefab, root,
-                            new Vector3(Mathf.Cos(a) * ring, 0, Mathf.Sin(a) * ring), bellH, 0f, grey);
+                            new Vector3(Mathf.Cos(a) * ring, 0, Mathf.Sin(a) * ring), bellH, 0f, metal);
                     }
+
+                    // The generated nozzle meshes are thin open shells with a torn upper rim.
+                    // A recessed engine bay hides those rims and ties the cluster to stage 1,
+                    // leaving only the clean bell sections visible.
+                    float clusterRadius = ring + smallRadius;
+                    float bayBottom = EngineH * .52f;
+                    float bayTop = Stage1Base + .02f;
+                    Cylinder("Engine bay", new Vector3(0, (bayBottom + bayTop) * .5f, 0),
+                        clusterRadius * 1.06f, bayTop - bayBottom, dark, root);
+                    Cylinder("Thrust ring", new Vector3(0, Stage1Base - .04f, 0),
+                        stage1Width * .5f + .05f, .2f, grey, root);
                 }
                 else
                 {
@@ -550,7 +604,7 @@ namespace SpaceMissionDesign.UI
             }
 
             // Engine flame (hidden until liftoff).
-            var flameGO = Cylinder("Engine flame", new Vector3(0, -1.7f, 0), .62f, 3.4f, flameMat, root);
+            var flameGO = Cylinder("Engine flame", new Vector3(0, -2.8f, 0), .9f, 5.2f, flameMat, root);
             flame = flameGO.transform;
             flameBaseScale = flame.localScale;
             flame.gameObject.SetActive(false);
@@ -591,6 +645,7 @@ namespace SpaceMissionDesign.UI
             if (psShader == null) psShader = Shader.Find("Legacy Shaders/Particles/Additive");
             if (psShader == null) psShader = Shader.Find("Sprites/Default");
             var psMat = new Material(psShader != null ? psShader : Shader.Find("Unlit/Color"));
+            psMat.mainTexture = SoftDotTexture();
             if (psMat.HasProperty("_Color")) psMat.SetColor("_Color", new Color(1f, .72f, .35f, .9f));
             var renderer = go.GetComponent<ParticleSystemRenderer>();
             renderer.material = psMat;
