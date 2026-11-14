@@ -90,9 +90,10 @@ namespace SpaceMissionDesign.Game
         }
 
         /// <summary>
-        /// Returns a list of constraint violations for the current design.
+        /// Design-phase checks only: mass, power, budget and data rate.
+        /// Launch vehicle/orbit are validated later, on the launch screen.
         /// </summary>
-        public List<string> GetConstraintViolations()
+        public List<string> GetDesignViolations()
         {
             var violations = new List<string>();
             if (manager == null) return violations;
@@ -107,7 +108,20 @@ namespace SpaceMissionDesign.Game
             if (design.TotalCostUsd > c.budgetUsd)
                 violations.Add($"Cost over budget: ${design.TotalCostUsd:F0} > ${c.budgetUsd:F0}");
             if (design.TotalDataRateKbps < c.minDataRateKbps)
-                violations.Add($"Data rate too low: {design.TotalDataRateKbps:F1} kbps < {c.minDataRateKbps:F1} kbps");
+                violations.Add($"Data rate too low: {design.TotalDataRateKbps:F1} kbps < {c.minDataRateKbps:F1} kbps — add Communications");
+
+            return violations;
+        }
+
+        /// <summary>
+        /// Full validation used before simulating: design checks plus launch vehicle and orbit.
+        /// </summary>
+        public List<string> GetConstraintViolations()
+        {
+            var violations = GetDesignViolations();
+            if (manager == null) return violations;
+
+            var design = manager.SpacecraftDesign;
             if (design.launchVehicle == null)
                 violations.Add("No launch vehicle selected.");
             if (design.orbit == null)

@@ -261,8 +261,8 @@ namespace SpaceMissionDesign.UI
             var d = manager.SpacecraftDesign;
             var c = manager.Constraints;
             NewText(canvas.transform,
-                $"Mass {d.TotalMassKg:F0} / {c.maxMassKg:F0} kg     Power {d.TotalPowerDrawW:F0} / {c.maxPowerW:F0} W     Cost ${d.TotalCostUsd:F0} / ${c.budgetUsd:F0}",
-                20, new Vector2(0, 290), new Vector2(1300, 34), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
+                $"Mass {d.TotalMassKg:N0} / {c.maxMassKg:N0} kg     Power {d.TotalPowerDrawW:N0} / {c.maxPowerW:N0} W     Cost ${d.TotalCostUsd:N0} / ${c.budgetUsd:N0}",
+                20, new Vector2(0, 290), new Vector2(1500, 34), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
 
             var types = new[] { ComponentType.Hull, ComponentType.Propulsion, ComponentType.Power,
                                 ComponentType.Communications, ComponentType.Structure, ComponentType.Thermal };
@@ -276,8 +276,10 @@ namespace SpaceMissionDesign.UI
             }
 
             var designer = FindFirstObjectByType<SpacecraftDesigner>();
-            var violations = designer != null ? designer.GetConstraintViolations() : new List<string>();
-            string vText = violations.Count == 0 ? "All constraints satisfied." : "Violations:\n• " + string.Join("\n• ", violations);
+            var violations = designer != null ? designer.GetDesignViolations() : new List<string>();
+            string vText = violations.Count == 0
+                ? "All design constraints satisfied. Continue to instruments."
+                : "Design violations (fix before continuing):\n• " + string.Join("\n• ", violations);
             NewText(canvas.transform, vText, 17, new Vector2(0, -55), new Vector2(1150, 120), TextAnchor.MiddleCenter,
                 violations.Count == 0 ? new Color(.45f, .95f, .60f) : new Color(1f, .45f, .42f));
 

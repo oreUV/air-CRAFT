@@ -83,6 +83,8 @@ namespace SpaceMissionDesign.Game
         public void StartNewMission(MissionObjective objective)
         {
             currentObjective = objective;
+            // Mission lifetime comes from the objective (Apollo 11 is ~8 days, not a full year).
+            constraints.missionLifetimeDays = Mathf.Clamp((float)objective.maxMissionLifetimeDays, 1f, 365f);
             spacecraftDesign = new SpacecraftDesign { spacecraftName = objective.missionName + " Spacecraft" };
             simulationComplete = false;
             simulationResult = null;
