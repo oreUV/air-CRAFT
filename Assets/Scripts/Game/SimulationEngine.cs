@@ -45,9 +45,12 @@ namespace SpaceMissionDesign.Game
             margins["science"] = totalScience - objective.targetScienceValue;
 
             // --- Cost efficiency ---
+            // Scored against a fixed reference rather than the chosen budget, otherwise
+            // dragging the budget slider up would inflate the score for free.
+            const double costReferenceUsd = 900_000_000;
             double costRatio = design.TotalCostUsd / constraints.budgetUsd;
-            double costScore = (1.0 - costRatio) * 20; // up to 20 points, clamped at 0
-            costScore = Mathf.Clamp((float)costScore, 0, 20);
+            double costEfficiency = Mathf.Clamp01((float)(1.0 - design.TotalCostUsd / costReferenceUsd));
+            double costScore = costEfficiency * 20; // up to 20 points
             score += costScore;
 
             feedback.Add($"Cost: ${design.TotalCostUsd:F0} of ${constraints.budgetUsd:F0} budget ({(costRatio * 100):F0}% used).");
