@@ -56,6 +56,28 @@ height/width the assembly asks for, then re-anchors bottom-centre. That means a
 re-exported or replacement model with a different import scale will still stack
 correctly without code changes.
 
+## Runtime orientation normalisation
+
+Blender's FBX axis settings and Unity's importer do not always agree: the models
+in this folder came back from the importer lying on their side even though they
+were exported Y-up. Rather than depend on that agreement, `PlaceModel` fixes
+orientation itself:
+
+1. Measure the mesh bounds.
+2. If the longest axis is X or Z, rotate it so that axis becomes +Y
+   (`UprightRotation`). Models that are already tallest along Y are left alone,
+   so this is safe to run on every refresh.
+3. Compare how wide the mesh is at its bottom and top 18% (`WideEndIsUp`). If the
+   wide end is up — a heat shield pointing skyward, a nozzle bell pointing up —
+   the part is turned over in parent space. This is why the meshes are imported
+   with `isReadable: 1`: the check needs vertex positions.
+
+If vertex data is unavailable the step is skipped and the bake convention
+(wide end down) is assumed, so the models still stand upright.
+
+Because both steps derive from the mesh, they also protect against a future
+model being exported with a different axis convention.
+
 ## Replacing a model
 
 1. Drop the new FBX into `C:\Users\vaish\Downloads\models\` using the same filename.

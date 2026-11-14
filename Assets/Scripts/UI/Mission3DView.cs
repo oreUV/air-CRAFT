@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using SpaceMissionDesign.Data;
 
@@ -203,6 +204,24 @@ namespace SpaceMissionDesign.UI
 
             if (!TryLocalBounds(go, parent, out var bounds)) return go.transform;
 
+            // The FBX axis conversion is inconsistent between Blender and Unity's importer,
+            // so orientation is normalised here from the mesh itself instead of trusting it.
+            var upright = UprightRotation(bounds.size);
+            if (upright != Quaternion.identity)
+            {
+                go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * upright;
+                if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
+            }
+
+            // Keep the working end down: heat shield, tank base, nozzle bell.
+            // The flip is applied in parent space, so it turns the part over rather than
+            // spinning it around whatever local axis happens to point up.
+            if (WideEndIsUp(go))
+            {
+                go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
+                if (TryLocalBounds(go, parent, out var flipped)) bounds = flipped;
+            }
+
             float h = Mathf.Max(bounds.size.y, .0001f);
 
             // Uniform scale: the prefab's own height/width ratio is preserved.
@@ -224,13 +243,122 @@ namespace SpaceMissionDesign.UI
             return go.transform;
         }
 
+        /// <summary>
+        /// Returns the rotation needed to stand a model up, given its current bounds.
+        /// Models exported with the long axis on X or Z are rotated so that axis becomes +Y.
+        /// Already-upright models get identity, which makes this safe to run every refresh.
+        /// </summary>
+        private static Quaternion UprightRotation(Vector3 size)
+        {
+            float longest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+
+            // Within a few percent of the vertical dimension: leave it alone.
+            if (longest <= size.y * 1.03f) return Quaternion.identity;
+
+            // Lying along X: +X becomes +Y, so -X (the wide end) ends up pointing down.
+            if (size.x >= size.z) return Quaternion.Euler(0f, 0f, 90f);
+
+            // Lying along Z: +Z becomes +Y, -Z points down.
+            return Quaternion.Euler(-90f, 0f, 0f);
+        }
+
+        /// <summary>
+        /// True when the wider end of the model sits at the top. Compares how far vertices
+        /// spread around the vertical axis in the bottom and top 18% of the mesh, which is
+        /// what distinguishes a nozzle bell from a narrow throat, or a heat shield from a nose.
+        /// Returns false when vertex data is unavailable (mesh not marked readable), in which
+        /// case the bake convention (wide end down) is assumed to already be correct.
+        /// </summary>
+        private static bool WideEndIsUp(GameObject go)
+        {
+            var points = new List<Vector3>(1024);
+            foreach (var mf in go.GetComponentsInChildren<MeshFilter>())
+            {
+                var mesh = mf != null ? mf.sharedMesh : null;
+                if (mesh == null) return false;
+
+                Vector3[] vertices;
+                try { vertices = mesh.vertices; }
+                catch (UnityException) { return false; }   // not readable at runtime
+
+                var toWorld = mf.transform.localToWorldMatrix;
+                int step = Mathf.Max(1, vertices.Length / 500);
+                for (int i = 0; i < vertices.Length; i += step)
+                    points.Add(toWorld.MultiplyPoint3x4(vertices[i]));
+            }
+
+            if (points.Count < 60) return false;
+
+            float minY = float.MaxValue, maxY = float.MinValue;
+            float sumX = 0f, sumZ = 0f;
+            foreach (var p in points)
+            {
+                minY = Mathf.Min(minY, p.y);
+                maxY = Mathf.Max(maxY, p.y);
+                sumX += p.x;
+                sumZ += p.z;
+            }
+            float centreX = sumX / points.Count, centreZ = sumZ / points.Count;
+
+            float height = Mathf.Max(maxY - minY, 1e-4f);
+            float lowCut = minY + height * .18f;
+            float highCut = maxY - height * .18f;
+
+            float lowSpread = 0f, highSpread = 0f;
+            int lowCount = 0, highCount = 0;
+            foreach (var p in points)
+            {
+                float r = new Vector2(p.x - centreX, p.z - centreZ).magnitude;
+                if (p.y <= lowCut) { lowSpread += r; lowCount++; }
+                else if (p.y >= highCut) { highSpread += r; highCount++; }
+            }
+
+            if (lowCount < 8 || highCount < 8) return false;
+
+            lowSpread /= lowCount;
+            highSpread /= highCount;
+            return highSpread > lowSpread * 1.12f;
+        }
+
+        /// <summary>
+        /// Axis-aligned bounds of every mesh under <paramref name="go"/>, expressed in
+        /// <paramref name="space"/>'s local space. Computed from mesh data and the transform
+        /// matrices rather than <see cref="Renderer.bounds"/>, so the result is correct in the
+        /// same frame a rotation or scale is applied.
+        /// </summary>
         private static bool TryLocalBounds(GameObject go, Transform space, out Bounds bounds)
         {
             bounds = new Bounds();
-            var renderers = go.GetComponentsInChildren<Renderer>();
-            if (renderers.Length == 0 || space == null) return false;
+            if (space == null) return false;
 
             bool has = false;
+            var filters = go.GetComponentsInChildren<MeshFilter>();
+            foreach (var mf in filters)
+            {
+                var mesh = mf != null ? mf.sharedMesh : null;
+                if (mesh == null) continue;
+
+                var toSpace = space.worldToLocalMatrix * mf.transform.localToWorldMatrix;
+                var mb = mesh.bounds;
+                Vector3 c = mb.center, e = mb.extents;
+                for (int i = 0; i < 8; i++)
+                {
+                    var corner = c + new Vector3(
+                        (i & 1) == 0 ? -e.x : e.x,
+                        (i & 2) == 0 ? -e.y : e.y,
+                        (i & 4) == 0 ? -e.z : e.z);
+                    var lp = toSpace.MultiplyPoint3x4(corner);
+                    if (!has) { bounds = new Bounds(lp, Vector3.zero); has = true; }
+                    else bounds.Encapsulate(lp);
+                }
+            }
+
+            if (has) return true;
+
+            // Fallback for renderers that are not plain MeshFilters (e.g. skinned meshes).
+            var renderers = go.GetComponentsInChildren<Renderer>();
+            if (renderers.Length == 0) return false;
+
             foreach (var r in renderers)
             {
                 var wb = r.bounds;
