@@ -42,7 +42,7 @@ namespace SpaceMissionDesign.UI
             uiFont = GetFont();
             EnsureManagers();
             EnsureEventSystem();
-            EnsureCamera();
+            new GameObject("3D Mission View").AddComponent<Mission3DView>().Initialize();
             BuildCanvas();
             ShowTitle();
         }
@@ -102,6 +102,8 @@ namespace SpaceMissionDesign.UI
 
         private void Clear()
         {
+            var raycaster = canvas != null ? canvas.GetComponent<GraphicRaycaster>() : null;
+            if (raycaster != null) raycaster.enabled = true;
             for (int i = canvas.transform.childCount - 1; i >= 0; i--)
                 Destroy(canvas.transform.GetChild(i).gameObject);
         }
@@ -168,37 +170,49 @@ namespace SpaceMissionDesign.UI
 
         private static void Background(Transform parent)
         {
-            var rt = NewRect(parent, "Background", Vector2.zero, Vector2.zero);
-            rt.anchorMin = Vector2.zero;
-            rt.anchorMax = Vector2.one;
-            rt.offsetMin = Vector2.zero;
-            rt.offsetMax = Vector2.zero;
-            var img = rt.gameObject.AddComponent<Image>();
-            img.color = new Color(.03f, .05f, .09f);
-            img.raycastTarget = false;
+            // Light full-screen tint: keeps the 3D scene visible.
+            var tint = NewRect(parent, "Background Tint", Vector2.zero, Vector2.zero);
+            tint.anchorMin = Vector2.zero;
+            tint.anchorMax = Vector2.one;
+            tint.offsetMin = Vector2.zero;
+            tint.offsetMax = Vector2.zero;
+            var tintImg = tint.gameObject.AddComponent<Image>();
+            tintImg.color = new Color(.02f, .03f, .06f, .16f);
+            tintImg.raycastTarget = false;
+
+            // Darker panel behind the left-half UI so text stays readable over the 3D view.
+            var panel = NewRect(parent, "Background Panel", Vector2.zero, new Vector2(960f, 1080f));
+            panel.anchorMin = panel.anchorMax = new Vector2(0f, .5f);
+            panel.pivot = new Vector2(0f, .5f);
+            panel.anchoredPosition = Vector2.zero;
+            panel.sizeDelta = new Vector2(960f, 1080f);
+            var panelImg = panel.gameObject.AddComponent<Image>();
+            panelImg.color = new Color(.02f, .035f, .07f, .55f);
+            panelImg.raycastTarget = false;
         }
 
         private void BeginScreen(string title, string subtitle = null)
         {
             Clear();
             Background(canvas.transform);
-            NewText(canvas.transform, title, 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, title, 40, new Vector2(-500, 400), new Vector2(880, 60), TextAnchor.MiddleCenter, null, true);
             if (!string.IsNullOrEmpty(subtitle))
-                NewText(canvas.transform, subtitle, 20, new Vector2(0, 352), new Vector2(1300, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
+                NewText(canvas.transform, subtitle, 19, new Vector2(-500, 352), new Vector2(880, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
         }
 
         // ---------------- screens ----------------
 
         private void ShowTitle()
         {
+            Mission3DView.Instance?.Refresh(null);
             BeginScreen("SPACE MISSION DESIGN", "Apollo 11 — Interactive Mission Design Game");
-            NewText(canvas.transform, "Design a spacecraft, choose instruments, pick a launch vehicle and orbit,\nand see how your engineering trade-offs affect mission success.", 18,
-                new Vector2(0, 270), new Vector2(1100, 70), TextAnchor.MiddleCenter, new Color(.70f, .78f, .90f));
+            NewText(canvas.transform, "Design a spacecraft, choose instruments, pick a launch vehicle and orbit,\nand see how your engineering trade-offs affect mission success.", 17,
+                new Vector2(-500, 270), new Vector2(880, 70), TextAnchor.MiddleCenter, new Color(.70f, .78f, .90f));
 
-            NewText(canvas.transform, "Players (1–4)", 22, new Vector2(0, 130), new Vector2(300, 30), TextAnchor.MiddleCenter, null, true);
-            var input = NewInput(canvas.transform, "1", new Vector2(0, 80), new Vector2(140, 48));
+            NewText(canvas.transform, "Players (1–4)", 21, new Vector2(-500, 130), new Vector2(300, 30), TextAnchor.MiddleCenter, null, true);
+            var input = NewInput(canvas.transform, "1", new Vector2(-500, 80), new Vector2(140, 48));
 
-            NewButton(canvas.transform, "BEGIN MISSION", new Vector2(0, -20), new Vector2(360, 60), () =>
+            NewButton(canvas.transform, "BEGIN MISSION", new Vector2(-500, -20), new Vector2(340, 60), () =>
             {
                 int n = 1;
                 if (input != null && int.TryParse(input.text, out int parsed)) n = Mathf.Clamp(parsed, 1, 4);
@@ -206,7 +220,7 @@ namespace SpaceMissionDesign.UI
                 ShowMissionSelect();
             });
 
-            NewText(canvas.transform, "Budget • Mass • Power • Data • Lifetime", 16, new Vector2(0, -160), new Vector2(900, 30), TextAnchor.MiddleCenter, new Color(.45f, .58f, .75f));
+            NewText(canvas.transform, "Budget • Mass • Power • Data • Lifetime", 15, new Vector2(-500, -160), new Vector2(880, 30), TextAnchor.MiddleCenter, new Color(.45f, .58f, .75f));
         }
 
         private void ShowMissionSelect()
@@ -217,13 +231,13 @@ namespace SpaceMissionDesign.UI
             {
                 var m = missions[i];
                 NewButton(canvas.transform, $"{m.missionName}  ·  {m.destination}  ·  target science {m.targetScienceValue:F0}",
-                    new Vector2(0, 240 - i * 80), new Vector2(900, 58), () =>
+                    new Vector2(-500, 240 - i * 80), new Vector2(880, 58), () =>
                     {
                         if (manager != null) manager.StartNewMission(m);
                         ShowDesign();
                     });
             }
-            NewButton(canvas.transform, "Back", new Vector2(0, -330), new Vector2(220, 50), ShowTitle, new Color(.25f, .28f, .34f));
+            NewButton(canvas.transform, "Back", new Vector2(-500, -330), new Vector2(220, 50), ShowTitle, new Color(.25f, .28f, .34f));
         }
 
         private List<MissionObjective> LoadMissions()
@@ -252,27 +266,28 @@ namespace SpaceMissionDesign.UI
 
         private void RefreshDesignStats()
         {
+            Mission3DView.Instance?.Refresh(manager.SpacecraftDesign);
             Clear();
             Background(canvas.transform);
-            NewText(canvas.transform, "SPACECRAFT DESIGN", 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, "SPACECRAFT DESIGN", 40, new Vector2(-500, 400), new Vector2(860, 60), TextAnchor.MiddleCenter, null, true);
             NewText(canvas.transform, manager.CurrentObjective.missionName + " — add subsystems, then continue", 20,
-                new Vector2(0, 352), new Vector2(1300, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
+                new Vector2(-500, 352), new Vector2(880, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
 
             var d = manager.SpacecraftDesign;
             var c = manager.Constraints;
             NewText(canvas.transform,
-                $"Mass {d.TotalMassKg:N0} / {c.maxMassKg:N0} kg     Power {d.TotalPowerDrawW:N0} / {c.maxPowerW:N0} W     Cost ${d.TotalCostUsd:N0} / ${c.budgetUsd:N0}",
-                20, new Vector2(0, 290), new Vector2(1500, 34), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
+                $"Mass {d.TotalMassKg:N0} / {c.maxMassKg:N0} kg\nPower {d.TotalPowerDrawW:N0} / {c.maxPowerW:N0} W\nCost ${d.TotalCostUsd:N0} / ${c.budgetUsd:N0}",
+                19, new Vector2(-500, 280), new Vector2(880, 90), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
 
             var types = new[] { ComponentType.Hull, ComponentType.Propulsion, ComponentType.Power,
                                 ComponentType.Communications, ComponentType.Structure, ComponentType.Thermal };
             for (int i = 0; i < types.Length; i++)
             {
                 int col = i % 2, row = i / 2;
-                float x = col == 0 ? -270f : 270f;
-                float y = 200f - row * 72f;
+                float x = col == 0 ? -680f : -360f;
+                float y = 190f - row * 76f;
                 var type = types[i];
-                NewButton(canvas.transform, "+  " + type, new Vector2(x, y), new Vector2(480, 56), () => AddDefaultComponent(type));
+                NewButton(canvas.transform, "+  " + type, new Vector2(x, y), new Vector2(300, 58), () => AddDefaultComponent(type), null, 18);
             }
 
             var designer = FindFirstObjectByType<SpacecraftDesigner>();
@@ -280,11 +295,11 @@ namespace SpaceMissionDesign.UI
             string vText = violations.Count == 0
                 ? "All design constraints satisfied. Continue to instruments."
                 : "Design violations (fix before continuing):\n• " + string.Join("\n• ", violations);
-            NewText(canvas.transform, vText, 17, new Vector2(0, -55), new Vector2(1150, 120), TextAnchor.MiddleCenter,
+            NewText(canvas.transform, vText, 17, new Vector2(-500, -70), new Vector2(900, 130), TextAnchor.MiddleCenter,
                 violations.Count == 0 ? new Color(.45f, .95f, .60f) : new Color(1f, .45f, .42f));
 
-            NewButton(canvas.transform, "Back", new Vector2(-270, -330), new Vector2(220, 50), ShowMissionSelect, new Color(.25f, .28f, .34f));
-            var next = NewButton(canvas.transform, "Next: Instruments", new Vector2(270, -330), new Vector2(280, 50), ShowInstruments);
+            NewButton(canvas.transform, "Back", new Vector2(-680, -330), new Vector2(220, 50), ShowMissionSelect, new Color(.25f, .28f, .34f));
+            var next = NewButton(canvas.transform, "Next: Instruments", new Vector2(-360, -330), new Vector2(280, 50), ShowInstruments);
             next.interactable = designer == null || violations.Count == 0;
         }
 
@@ -313,27 +328,28 @@ namespace SpaceMissionDesign.UI
         private void ShowInstruments()
         {
             if (manager == null || manager.CurrentObjective == null) { ShowTitle(); return; }
+            Mission3DView.Instance?.Refresh(manager.SpacecraftDesign);
             Clear();
             Background(canvas.transform);
-            NewText(canvas.transform, "SCIENCE INSTRUMENTS", 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, "SCIENCE INSTRUMENTS", 40, new Vector2(-500, 400), new Vector2(860, 60), TextAnchor.MiddleCenter, null, true);
             NewText(canvas.transform, "Destination: " + manager.CurrentObjective.destination + " — toggle instruments for the mission", 20,
-                new Vector2(0, 352), new Vector2(1300, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
+                new Vector2(-500, 352), new Vector2(880, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
 
             var d = manager.SpacecraftDesign;
             NewText(canvas.transform,
-                $"Instruments {d.instruments.Count}     Science/day {d.TotalSciencePerDay:F1}     Data/day {d.TotalDataVolumeGbPerDay:F2} GB",
-                20, new Vector2(0, 290), new Vector2(1300, 34), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
+                $"Instruments {d.instruments.Count}   ·   Science/day {d.TotalSciencePerDay:F1}   ·   Data/day {d.TotalDataVolumeGbPerDay:F2} GB",
+                19, new Vector2(-500, 290), new Vector2(900, 34), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
 
             var options = GetInstrumentsFor(manager.CurrentObjective.destination);
             for (int i = 0; i < options.Count; i++)
             {
                 var inst = options[i];
-                float y = 205f - i * 62f;
+                float y = 200f - i * 62f;
                 bool added = d.instruments.Exists(x => x.instrumentId == inst.instrumentId);
                 NewText(canvas.transform,
-                    $"{inst.displayName}   ·   {inst.massKg:F0} kg   ·   {inst.powerDrawW:F0} W   ·   science {inst.scienceValue:F0}/day",
-                    18, new Vector2(-120, y), new Vector2(760, 34), TextAnchor.MiddleLeft, new Color(.88f, .92f, .98f));
-                NewButton(canvas.transform, added ? "Remove" : "Add", new Vector2(400, y), new Vector2(160, 46), () =>
+                    $"{inst.displayName}  ·  {inst.massKg:F0} kg  ·  {inst.powerDrawW:F0} W  ·  sci {inst.scienceValue:F0}/day",
+                    18, new Vector2(-640, y), new Vector2(640, 34), TextAnchor.MiddleLeft, new Color(.88f, .92f, .98f));
+                NewButton(canvas.transform, added ? "Remove" : "Add", new Vector2(-160, y), new Vector2(140, 46), () =>
                 {
                     var existing = d.instruments.Find(x => x.instrumentId == inst.instrumentId);
                     if (existing != null) designer?.RemoveInstrument(existing); else designer?.AddInstrument(inst);
@@ -341,8 +357,8 @@ namespace SpaceMissionDesign.UI
                 }, added ? new Color(.55f, .28f, .28f) : new Color(.20f, .48f, .32f));
             }
 
-            NewButton(canvas.transform, "Back", new Vector2(-270, -330), new Vector2(220, 50), ShowDesign, new Color(.25f, .28f, .34f));
-            var next = NewButton(canvas.transform, "Next: Launch", new Vector2(270, -330), new Vector2(280, 50), ShowLaunch);
+            NewButton(canvas.transform, "Back", new Vector2(-680, -330), new Vector2(220, 50), ShowDesign, new Color(.25f, .28f, .34f));
+            var next = NewButton(canvas.transform, "Next: Launch", new Vector2(-360, -330), new Vector2(280, 50), ShowLaunch);
             next.interactable = d.instruments.Count > 0;
         }
 
@@ -366,13 +382,14 @@ namespace SpaceMissionDesign.UI
         private void ShowLaunch()
         {
             if (manager == null || manager.CurrentObjective == null) { ShowTitle(); return; }
+            Mission3DView.Instance?.Refresh(manager.SpacecraftDesign);
             Clear();
             Background(canvas.transform);
-            NewText(canvas.transform, "LAUNCH VEHICLE & ORBIT", 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
-            NewText(canvas.transform, "Select one launch vehicle and one orbit", 20,
-                new Vector2(0, 352), new Vector2(1300, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
+            NewText(canvas.transform, "LAUNCH VEHICLE & ORBIT", 34, new Vector2(-500, 400), new Vector2(880, 54), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, "Select one launch vehicle and one orbit", 19,
+                new Vector2(-500, 352), new Vector2(880, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
 
-            NewText(canvas.transform, "LAUNCH VEHICLES", 20, new Vector2(-320, 285), new Vector2(560, 30), TextAnchor.MiddleCenter, new Color(.55f, .72f, .95f), true);
+            NewText(canvas.transform, "LAUNCH VEHICLES", 18, new Vector2(-730, 300), new Vector2(420, 30), TextAnchor.MiddleCenter, new Color(.55f, .72f, .95f), true);
             var vehicles = GetVehicles();
             var selectedVehicle = manager.SpacecraftDesign.launchVehicle;
             for (int i = 0; i < vehicles.Count; i++)
@@ -380,14 +397,14 @@ namespace SpaceMissionDesign.UI
                 var v = vehicles[i];
                 bool sel = selectedVehicle != null && selectedVehicle.vehicleId == v.vehicleId;
                 NewButton(canvas.transform, $"{v.displayName}\n${v.costUsd / 1_000_000:F0}M · {v.maxPayloadKg:F0} kg",
-                    new Vector2(-320, 220 - i * 72), new Vector2(560, 62), () =>
+                    new Vector2(-730, 240 - i * 70), new Vector2(420, 60), () =>
                     {
                         designer?.SetLaunchVehicle(v);
                         ShowLaunch();
-                    }, sel ? new Color(.20f, .55f, .40f) : new Color(.16f, .34f, .58f), 17);
+                    }, sel ? new Color(.20f, .55f, .40f) : new Color(.16f, .34f, .58f), 16);
             }
 
-            NewText(canvas.transform, "ORBITS", 20, new Vector2(320, 285), new Vector2(560, 30), TextAnchor.MiddleCenter, new Color(.55f, .72f, .95f), true);
+            NewText(canvas.transform, "ORBITS", 18, new Vector2(-270, 300), new Vector2(420, 30), TextAnchor.MiddleCenter, new Color(.55f, .72f, .95f), true);
             var orbits = GetOrbits();
             var selectedOrbit = manager.SpacecraftDesign.orbit;
             for (int i = 0; i < orbits.Count; i++)
@@ -395,20 +412,20 @@ namespace SpaceMissionDesign.UI
                 var o = orbits[i];
                 bool sel = selectedOrbit != null && selectedOrbit.orbitId == o.orbitId;
                 NewButton(canvas.transform, $"{o.displayName}\n{o.deltaVRequiredKmS:F0} km/s · science ×{o.scienceMultiplier:F1}",
-                    new Vector2(320, 220 - i * 72), new Vector2(560, 62), () =>
+                    new Vector2(-270, 240 - i * 70), new Vector2(420, 60), () =>
                     {
                         designer?.SetOrbit(o);
                         ShowLaunch();
-                    }, sel ? new Color(.20f, .55f, .40f) : new Color(.16f, .34f, .58f), 17);
+                    }, sel ? new Color(.20f, .55f, .40f) : new Color(.16f, .34f, .58f), 16);
             }
 
             var d = manager.SpacecraftDesign;
-            string summary = $"Spacecraft mass {d.TotalMassKg:F0} kg · power {d.TotalPowerDrawW:F0} W · cost ${d.TotalCostUsd:F0}\n" +
-                             $"Vehicle: {(selectedVehicle != null ? selectedVehicle.displayName : "none")}   Orbit: {(selectedOrbit != null ? selectedOrbit.displayName : "none")}";
-            NewText(canvas.transform, summary, 18, new Vector2(0, -90), new Vector2(1250, 70), TextAnchor.MiddleCenter, new Color(.88f, .92f, .98f));
+            string summary = $"Mass {d.TotalMassKg:N0} kg · Power {d.TotalPowerDrawW:N0} W · Cost ${d.TotalCostUsd:N0}\n" +
+                             $"Vehicle: {(selectedVehicle != null ? selectedVehicle.displayName : "none")}   ·   Orbit: {(selectedOrbit != null ? selectedOrbit.displayName : "none")}";
+            NewText(canvas.transform, summary, 17, new Vector2(-500, -40), new Vector2(880, 70), TextAnchor.MiddleCenter, new Color(.88f, .92f, .98f));
 
-            NewButton(canvas.transform, "Back", new Vector2(-270, -330), new Vector2(220, 50), ShowInstruments, new Color(.25f, .28f, .34f));
-            NewButton(canvas.transform, "SIMULATE MISSION", new Vector2(270, -330), new Vector2(300, 50), Simulate, new Color(.55f, .38f, .12f));
+            NewButton(canvas.transform, "Back", new Vector2(-680, -330), new Vector2(220, 50), ShowInstruments, new Color(.25f, .28f, .34f));
+            NewButton(canvas.transform, "SIMULATE MISSION", new Vector2(-360, -330), new Vector2(280, 50), Simulate, new Color(.55f, .38f, .12f));
         }
 
         private static List<LaunchVehicle> GetVehicles()
@@ -438,14 +455,25 @@ namespace SpaceMissionDesign.UI
             var violations = des != null ? des.GetConstraintViolations() : new List<string>();
             if (violations.Count > 0)
             {
-                NewText(canvas.transform, "Fix these first:\n• " + string.Join("\n• ", violations), 18,
-                    new Vector2(0, -180), new Vector2(1100, 90), TextAnchor.MiddleCenter, new Color(1f, .45f, .42f));
+                NewText(canvas.transform, "Fix these first:\n• " + string.Join("\n• ", violations), 17,
+                    new Vector2(-500, -170), new Vector2(880, 90), TextAnchor.MiddleCenter, new Color(1f, .45f, .42f));
                 return;
             }
             var engine = FindFirstObjectByType<SimulationEngine>();
             if (engine == null) { Debug.LogError("No SimulationEngine found."); return; }
             engine.RunSimulation();
-            ShowResults();
+
+            // Reset the 3D stack and fly it while the results are being prepared.
+            Mission3DView.Instance?.Refresh(manager.SpacecraftDesign);
+            Mission3DView.Instance?.PlayLaunch();
+            NewText(canvas.transform, "LIFTOFF — running flight simulation…", 24,
+                new Vector2(-500, -170), new Vector2(880, 44), TextAnchor.MiddleCenter, new Color(1f, .82f, .45f), true);
+
+            // Freeze input during the launch sequence.
+            var raycaster = canvas.GetComponent<GraphicRaycaster>();
+            if (raycaster != null) raycaster.enabled = false;
+
+            Invoke(nameof(ShowResults), 2.6f);
         }
 
         private void ShowResults()
@@ -454,19 +482,19 @@ namespace SpaceMissionDesign.UI
             if (result == null) { ShowTitle(); return; }
             Clear();
             Background(canvas.transform);
-            NewText(canvas.transform, "MISSION RESULTS", 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, "MISSION RESULTS", 36, new Vector2(-500, 400), new Vector2(880, 56), TextAnchor.MiddleCenter, null, true);
 
-            NewText(canvas.transform, result.missionSuccess ? "MISSION SUCCESS" : "MISSION FAILED", 46,
-                new Vector2(0, 315), new Vector2(900, 60), TextAnchor.MiddleCenter,
+            NewText(canvas.transform, result.missionSuccess ? "MISSION SUCCESS" : "MISSION FAILED", 40,
+                new Vector2(-500, 320), new Vector2(880, 56), TextAnchor.MiddleCenter,
                 result.missionSuccess ? new Color(.40f, .95f, .55f) : new Color(1f, .42f, .40f), true);
 
-            NewText(canvas.transform, $"Mission Score: {result.score:F1} / 100", 28,
-                new Vector2(0, 250), new Vector2(900, 44), TextAnchor.MiddleCenter, new Color(.90f, .94f, 1f), true);
+            NewText(canvas.transform, $"Mission Score: {result.score:F1} / 100", 26,
+                new Vector2(-500, 255), new Vector2(880, 44), TextAnchor.MiddleCenter, new Color(.90f, .94f, 1f), true);
 
-            NewText(canvas.transform, string.Join("\n", result.feedbackMessages), 17,
-                new Vector2(0, 40), new Vector2(1250, 280), TextAnchor.UpperCenter, new Color(.82f, .88f, .96f));
+            NewText(canvas.transform, string.Join("\n", result.feedbackMessages), 15,
+                new Vector2(-500, 60), new Vector2(880, 300), TextAnchor.UpperCenter, new Color(.82f, .88f, .96f));
 
-            NewButton(canvas.transform, "DESIGN ANOTHER MISSION", new Vector2(0, -330), new Vector2(380, 56), () =>
+            NewButton(canvas.transform, "DESIGN ANOTHER MISSION", new Vector2(-500, -330), new Vector2(360, 54), () =>
             {
                 if (manager != null) manager.ResetMission();
                 ShowTitle();
