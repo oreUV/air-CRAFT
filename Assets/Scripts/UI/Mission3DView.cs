@@ -569,7 +569,8 @@ namespace SpaceMissionDesign.UI
             // --- Per-part width multiplier (X/Z only) ---
             var partWidthMult = new Dictionary<string, float>
             {
-                {"S-IC top", 1.4f},
+                // S-IC top width is computed below to match stage1Width exactly.
+                {"S-IC top", 1f},
             };
 
             // --- Stack the Saturn V from bottom to top ---
@@ -601,6 +602,34 @@ namespace SpaceMissionDesign.UI
                 Destroy(go0);
                 float s0h = partTargetHeight["S-IC bottom"] / Mathf.Max(b0.size.y, .0001f);
                 stage1Width = Mathf.Max(b0.size.x, b0.size.z) * s0h;
+
+                // Compute S-IC top width multiplier so it matches stage1Width exactly.
+                float wMultTop = 1f;
+                var goW = Instantiate(parts["S-IC top"]);
+                goW.transform.localPosition = Vector3.zero;
+                goW.transform.localRotation = Quaternion.identity;
+                goW.transform.localScale = Vector3.one;
+                foreach (var col in goW.GetComponentsInChildren<Collider>()) Destroy(col);
+                foreach (var anim in goW.GetComponentsInChildren<Animator>()) Destroy(anim);
+                if (TryLocalBounds(goW, root, out var bw))
+                {
+                    var upW = AxisToUpRotation(bw.size);
+                    if (upW != Quaternion.identity)
+                    {
+                        goW.transform.localRotation = upW;
+                        if (TryLocalBounds(goW, root, out var bwS)) bw = bwS;
+                    }
+                    if (WideEndIsUp(goW))
+                    {
+                        goW.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * goW.transform.localRotation;
+                        if (TryLocalBounds(goW, root, out var bwF)) bw = bwF;
+                    }
+                    float sW = partTargetHeight["S-IC top"] / Mathf.Max(bw.size.y, .0001f);
+                    float naturalW = Mathf.Max(bw.size.x, bw.size.z) * sW;
+                    if (naturalW > .0001f) wMultTop = stage1Width / naturalW;
+                }
+                Destroy(goW);
+                partWidthMult["S-IC top"] = wMultTop;
 
                 y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), partTargetHeight["S-IC bottom"], white,
                     extraEuler: partExtraEuler["S-IC bottom"]);
