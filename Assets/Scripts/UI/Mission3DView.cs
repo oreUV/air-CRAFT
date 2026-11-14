@@ -581,9 +581,12 @@ namespace SpaceMissionDesign.UI
                 y = StackSaturnVPart(parts, "S-IC joining cube", root, new Vector3(0, y, 0), globalScale, dark);
                 y = StackSaturnVPart(parts, "stage 1-2 coupler", root, new Vector3(0, y, 0), globalScale, grey);
                 y = StackSaturnVPart(parts, "S-II", root, new Vector3(0, y, 0), globalScale, metal);
+                y = StackSaturnVPart(parts, "stage 1-2 coupler v2", root, new Vector3(0, y, 0), globalScale, grey);
                 y = StackSaturnVPart(parts, "S-IV b", root, new Vector3(0, y, 0), globalScale, white);
-                y = StackSaturnVPart(parts, "service module", root, new Vector3(0, y, 0), globalScale, blue);
+                // Lem shroud (SLA) covers the Lunar Module, sits above S-IVB / Instrument Unit.
                 y = StackSaturnVPart(parts, "lem shroud", root, new Vector3(0, y, 0), globalScale, dark);
+                // Service module sits above the SLA, command module on top of the service module.
+                y = StackSaturnVPart(parts, "service module", root, new Vector3(0, y, 0), globalScale, blue);
                 y = StackSaturnVPart(parts, "command moduel", root, new Vector3(0, y, 0), globalScale, white);
                 y = StackSaturnVPart(parts, "escape tower", root, new Vector3(0, y, 0), globalScale, dark);
 
