@@ -523,7 +523,7 @@ namespace SpaceMissionDesign.UI
             //     Assets/Resources/Models/ but are no longer loaded by the game) ---
             var parts = new Dictionary<string, GameObject>();
             foreach (var partName in new[] {
-                "S-IC bottom", "S-IC top", "S-IC joining cube",
+                "S-IC bottom", "S-IC top",
                 "stage 1-2 coupler", "S-II", "S-IV b",
                 "service module", "lem shroud", "command moduel",
                 "escape tower", "fin (print 4)"
@@ -545,7 +545,6 @@ namespace SpaceMissionDesign.UI
             {
                 {"S-IC bottom", 7.2f},
                 {"S-IC top", 4.0f},
-                {"S-IC joining cube", 0.6f},
                 {"stage 1-2 coupler", 0.9f},
                 {"S-II", 6.2f},
                 {"stage 1-2 coupler v2", 0.9f},
@@ -561,6 +560,7 @@ namespace SpaceMissionDesign.UI
             var partExtraEuler = new Dictionary<string, Vector3>
             {
                 {"S-IC bottom", new Vector3(180f, 0f, 0f)},
+                {"S-IC top", new Vector3(180f, 0f, 0f)},
             };
 
             // --- Stack the Saturn V from bottom to top ---
@@ -595,8 +595,8 @@ namespace SpaceMissionDesign.UI
 
                 y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), partTargetHeight["S-IC bottom"], white,
                     extraEuler: partExtraEuler["S-IC bottom"]);
-                y = StackSaturnVPart(parts, "S-IC top", root, new Vector3(0, y, 0), partTargetHeight["S-IC top"], metal);
-                y = StackSaturnVPart(parts, "S-IC joining cube", root, new Vector3(0, y, 0), partTargetHeight["S-IC joining cube"], dark);
+                y = StackSaturnVPart(parts, "S-IC top", root, new Vector3(0, y, 0), partTargetHeight["S-IC top"], metal,
+                    extraEuler: partExtraEuler["S-IC top"]);
                 y = StackSaturnVPart(parts, "stage 1-2 coupler", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler"], grey);
                 y = StackSaturnVPart(parts, "S-II", root, new Vector3(0, y, 0), partTargetHeight["S-II"], metal);
                 y = StackSaturnVPart(parts, "stage 1-2 coupler v2", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler v2"], grey);
