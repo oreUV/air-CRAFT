@@ -1,0 +1,9 @@
+{
+  "missionName": "Apollo 11",
+  "destination": "Moon",
+  "description": "First crewed lunar landing. Land at Tranquility Base, conduct surface EVA, and return samples and crew safely to Earth.",
+  "targetScienceValue": 120,
+  "scienceTargets": ["lunar_samples", "seismic_data", "laser_ranging", "solar_wind", "photography"],
+  "minMissionLifetimeDays": 6,
+  "maxMissionLifetimeDays": 10
+}
