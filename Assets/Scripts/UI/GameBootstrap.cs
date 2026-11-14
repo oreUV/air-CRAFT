@@ -1,530 +1,474 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
-using TMPro;
 using SpaceMissionDesign.Data;
 using SpaceMissionDesign.Game;
 
 namespace SpaceMissionDesign.UI
 {
     /// <summary>
-    /// Self-bootstrapping entry point. Creates a DontDestroyOnLoad GameObject holding
-    /// MissionManager, SpacecraftDesigner, SimulationEngine, ScoreManager, MultiplayerManager,
-    /// then loads/builds the main menu scene entirely from code.
+    /// Single self-contained entry point. Uses only legacy uGUI (no TMP dependency).
+    /// Auto-spawns itself in any scene via RuntimeInitializeOnLoadMethod, so pressing Play
+    /// works even in an empty default scene.
     /// </summary>
-    [DefaultExecutionOrder(-1000)]
     public sealed class GameBootstrap : MonoBehaviour
     {
-        public static GameBootstrap Instance { get; private set; }
+        private static GameBootstrap instance;
+        private static Font uiFont;
 
-        [Header("Scenes (build order)")]
-        [SerializeField] private int mainMenuBuildIndex = 0;
+        private Canvas canvas;
+        private MissionManager manager => MissionManager.Instance;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void AutoStart()
+        {
+            if (UnityEngine.Object.FindFirstObjectByType<GameBootstrap>() != null) return;
+            var go = new GameObject("Game Bootstrap");
+            go.AddComponent<GameBootstrap>();
+        }
 
         private void Awake()
         {
-            if (Instance != null && Instance != this)
+            if (instance != null && instance != this)
             {
                 Destroy(gameObject);
                 return;
             }
-            Instance = this;
+            instance = this;
             DontDestroyOnLoad(gameObject);
 
+            uiFont = GetFont();
             EnsureManagers();
-            BuildMainMenuUI();
+            EnsureEventSystem();
+            EnsureCamera();
+            BuildCanvas();
+            ShowTitle();
+        }
+
+        // ---------------- infrastructure ----------------
+
+        private static Font GetFont()
+        {
+            Font f = null;
+            try { f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); } catch { }
+            if (f == null) { try { f = Resources.GetBuiltinResource<Font>("Arial.ttf"); } catch { } }
+            if (f == null) f = Font.CreateDynamicFontFromOSFont(new[] { "Arial", "Segoe UI", "Helvetica", "Liberation Sans" }, 16);
+            return f;
         }
 
         private void EnsureManagers()
         {
-            if (FindObjectOfType<MissionManager>() == null)
-                new GameObject("Mission Manager").AddComponent<MissionManager>();
-            if (FindObjectOfType<SpacecraftDesigner>() == null)
-                new GameObject("Spacecraft Designer").AddComponent<SpacecraftDesigner>();
-            if (FindObjectOfType<SimulationEngine>() == null)
-                new GameObject("Simulation Engine").AddComponent<SimulationEngine>();
-            if (FindObjectOfType<ScoreManager>() == null)
-                new GameObject("Score Manager").AddComponent<ScoreManager>();
-            if (FindObjectOfType<MultiplayerManager>() == null)
-                new GameObject("Multiplayer Manager").AddComponent<MultiplayerManager>();
+            if (FindFirstObjectByType<MissionManager>() == null) new GameObject("Mission Manager").AddComponent<MissionManager>();
+            if (FindFirstObjectByType<SpacecraftDesigner>() == null) new GameObject("Spacecraft Designer").AddComponent<SpacecraftDesigner>();
+            if (FindFirstObjectByType<SimulationEngine>() == null) new GameObject("Simulation Engine").AddComponent<SimulationEngine>();
+            if (FindFirstObjectByType<ScoreManager>() == null) new GameObject("Score Manager").AddComponent<ScoreManager>();
+            if (FindFirstObjectByType<MultiplayerManager>() == null) new GameObject("Multiplayer Manager").AddComponent<MultiplayerManager>();
         }
 
-        private void BuildMainMenuUI()
+        private void EnsureEventSystem()
         {
-            var canvasGO = new GameObject("Main Menu Canvas");
-            var canvas = canvasGO.AddComponent<Canvas>();
+            if (FindFirstObjectByType<EventSystem>() != null) return;
+            var go = new GameObject("Event System");
+            go.AddComponent<EventSystem>();
+            go.AddComponent<StandaloneInputModule>();
+            DontDestroyOnLoad(go);
+        }
+
+        private void EnsureCamera()
+        {
+            if (Camera.main != null) return;
+            var go = new GameObject("Main Camera");
+            go.tag = "MainCamera";
+            var cam = go.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(.02f, .03f, .06f);
+            go.AddComponent<AudioListener>();
+            DontDestroyOnLoad(go);
+        }
+
+        private void BuildCanvas()
+        {
+            var go = new GameObject("Game UI", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+            canvas = go.GetComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvasGO.AddComponent<GraphicRaycaster>();
-            canvasGO.AddComponent<MainMenuUIBootstrap>();
-        }
-    }
-
-    public sealed class MainMenuUIBootstrap : MonoBehaviour
-    {
-        private void Awake()
-        {
-            var canvas = GetComponentInParent<Canvas>();
-            var panel = MakePanel(canvas.transform, "MenuPanel", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(400, 300));
-
-            var title = MakeText(panel.transform, "Title", "Space Mission Design", 24, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.85f), new Vector2(380, 40));
-            title.alignment = TextAlignmentOptions.Center;
-
-            var countLabel = MakeText(panel.transform, "CountLabel", "Players (1-4):", 16, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.55f), new Vector2(380, 20));
-            countLabel.alignment = TextAlignmentOptions.Center;
-
-            var countInput = MakeInputField(panel.transform, "PlayerCountInput", "1", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.42f), new Vector2(120, 30));
-
-            var startBtn = MakeButton(panel.transform, "StartButton", "Start Mission", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.25f), new Vector2(200, 40));
-            startBtn.onClick.AddListener(() =>
-            {
-                int n = 1;
-                if (countInput != null && int.TryParse(countInput.text, out int p)) n = Mathf.Clamp(p, 1, 4);
-                var mm = MissionManager.Instance;
-                if (mm != null)
-                {
-                    mm.SetPlayerCount(n);
-                    LoadMissionSetup();
-                }
-            });
+            var scaler = go.GetComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920, 1080);
+            scaler.matchWidthOrHeight = .5f;
+            DontDestroyOnLoad(go);
         }
 
-        private static TextMeshProUGUI MakeText(Transform parent, string name, string text, int size, Vector2 pivot, Vector2 anchor, Vector2 sizeDelta)
+        private void Clear()
         {
-            var go = new GameObject(name);
+            for (int i = canvas.transform.childCount - 1; i >= 0; i--)
+                Destroy(canvas.transform.GetChild(i).gameObject);
+        }
+
+        // ---------------- UI primitives ----------------
+
+        private static RectTransform NewRect(Transform parent, string name, Vector2 pos, Vector2 size)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
             go.transform.SetParent(parent, false);
-            var rt = go.AddComponent<RectTransform>();
-            rt.pivot = pivot;
-            rt.anchorMin = anchor;
-            rt.anchorMax = anchor;
-            rt.anchoredPosition = Vector2.zero;
-            rt.sizeDelta = sizeDelta;
-            var tmp = go.AddComponent<TextMeshProUGUI>();
-            tmp.text = text;
-            tmp.fontSize = size;
-            return tmp;
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(.5f, .5f);
+            rt.anchoredPosition = pos;
+            rt.sizeDelta = size;
+            return rt;
         }
 
-        private static Button MakeButton(Transform parent, string name, string label, Vector2 pivot, Vector2 anchor, Vector2 sizeDelta)
+        private static Text NewText(Transform parent, string text, int size, Vector2 pos, Vector2 box,
+            TextAnchor anchor = TextAnchor.MiddleCenter, Color? color = null, bool bold = false)
         {
-            var go = new GameObject(name);
-            go.transform.SetParent(parent, false);
-            var rt = go.AddComponent<RectTransform>();
-            rt.pivot = pivot;
-            rt.anchorMin = anchor;
-            rt.anchorMax = anchor;
-            rt.anchoredPosition = Vector2.zero;
-            rt.sizeDelta = sizeDelta;
-            var img = go.AddComponent<Image>();
-            img.color = new Color(0.2f, 0.45f, 0.75f, 1f);
-            var btn = go.AddComponent<Button>();
-            var txtGO = new GameObject("Label");
-            txtGO.transform.SetParent(go.transform, false);
-            var trt = txtGO.AddComponent<RectTransform>();
-            trt.anchorMin = Vector2.zero;
-            trt.anchorMax = Vector2.one;
-            trt.offsetMin = Vector2.zero;
-            trt.offsetMax = Vector2.zero;
-            var tt = txtGO.AddComponent<TextMeshProUGUI>();
-            tt.text = label;
-            tt.fontSize = 14;
-            tt.alignment = TextAlignmentOptions.Center;
+            var rt = NewRect(parent, "Text", pos, box);
+            var t = rt.gameObject.AddComponent<Text>();
+            t.font = uiFont;
+            t.fontSize = size;
+            t.text = text;
+            t.alignment = anchor;
+            t.color = color ?? new Color(.92f, .95f, 1f);
+            t.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
+            t.horizontalOverflow = HorizontalWrapMode.Wrap;
+            t.verticalOverflow = VerticalWrapMode.Overflow;
+            t.raycastTarget = false;
+            return t;
+        }
+
+        private static Button NewButton(Transform parent, string label, Vector2 pos, Vector2 size, Action onClick,
+            Color? tint = null, int fontSize = 20)
+        {
+            var rt = NewRect(parent, "Button", pos, size);
+            var img = rt.gameObject.AddComponent<Image>();
+            img.color = tint ?? new Color(.16f, .34f, .58f);
+            var btn = rt.gameObject.AddComponent<Button>();
+            btn.targetGraphic = img;
+            var nav = btn.navigation;
+            nav.mode = Navigation.Mode.None;
+            btn.navigation = nav;
+            if (onClick != null) btn.onClick.AddListener(() => onClick());
+            NewText(rt, label, fontSize, Vector2.zero, size, TextAnchor.MiddleCenter, new Color(.95f, .97f, 1f));
             return btn;
         }
 
-        private static TMP_InputField MakeInputField(Transform parent, string name, string text, Vector2 pivot, Vector2 anchor, Vector2 sizeDelta)
+        private static InputField NewInput(Transform parent, string value, Vector2 pos, Vector2 size)
         {
-            var go = new GameObject(name);
-            go.transform.SetParent(parent, false);
-            var rt = go.AddComponent<RectTransform>();
-            rt.pivot = pivot;
-            rt.anchorMin = anchor;
-            rt.anchorMax = anchor;
-            rt.anchoredPosition = Vector2.zero;
-            rt.sizeDelta = sizeDelta;
-            var img = go.AddComponent<Image>();
-            img.color = Color.white;
-            var input = go.AddComponent<TMP_InputField>();
-            input.text = text;
+            var rt = NewRect(parent, "Input", pos, size);
+            var img = rt.gameObject.AddComponent<Image>();
+            img.color = new Color(1f, 1f, 1f, .96f);
+            var input = rt.gameObject.AddComponent<InputField>();
+            var text = NewText(rt, "", 24, Vector2.zero, size - new Vector2(16, 8), TextAnchor.MiddleCenter, Color.black);
+            text.supportRichText = false;
+            input.textComponent = text;
+            input.targetGraphic = img;
+            input.text = value;
             return input;
         }
 
-        private static GameObject MakePanel(Transform parent, string name, Vector2 pivot, Vector2 anchor, Vector2 sizeDelta)
+        private static void Background(Transform parent)
         {
-            var go = new GameObject(name);
-            go.transform.SetParent(parent, false);
-            var rt = go.AddComponent<RectTransform>();
-            rt.pivot = pivot;
-            rt.anchorMin = anchor;
-            rt.anchorMax = anchor;
-            rt.anchoredPosition = Vector2.zero;
-            rt.sizeDelta = sizeDelta;
-            var img = go.AddComponent<Image>();
-            img.color = new Color(0.05f, 0.08f, 0.12f, 0.95f);
-            return go;
+            var rt = NewRect(parent, "Background", Vector2.zero, Vector2.zero);
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            var img = rt.gameObject.AddComponent<Image>();
+            img.color = new Color(.03f, .05f, .09f);
+            img.raycastTarget = false;
         }
 
-        private void LoadMissionSetup()
+        private void BeginScreen(string title, string subtitle = null)
         {
-            // Build mission setup UI by replacing this canvas's children.
-            foreach (Transform child in transform)
-                Destroy(child.gameObject);
-            var canvas = GetComponentInParent<Canvas>();
+            Clear();
+            Background(canvas.transform);
+            NewText(canvas.transform, title, 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+            if (!string.IsNullOrEmpty(subtitle))
+                NewText(canvas.transform, subtitle, 20, new Vector2(0, 352), new Vector2(1300, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
+        }
 
-            var mm = MissionManager.Instance;
-            var title = MakeText(transform, "Title", "Select Mission", 20, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.85f), new Vector2(400, 30));
-            title.alignment = TextAlignmentOptions.Center;
+        // ---------------- screens ----------------
 
-            var scroll = MakeScrollView(transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(380, 200));
-            var content = scroll.GetComponentInChildren<VerticalLayoutGroup>()?.transform;
-            if (content == null) content = scroll.transform;
+        private void ShowTitle()
+        {
+            BeginScreen("SPACE MISSION DESIGN", "Apollo 11 — Interactive Mission Design Game");
+            NewText(canvas.transform, "Design a spacecraft, choose instruments, pick a launch vehicle and orbit,\nand see how your engineering trade-offs affect mission success.", 18,
+                new Vector2(0, 270), new Vector2(1100, 70), TextAnchor.MiddleCenter, new Color(.70f, .78f, .90f));
 
-            var objectives = LoadObjectives();
-            foreach (var obj in objectives)
+            NewText(canvas.transform, "Players (1–4)", 22, new Vector2(0, 130), new Vector2(300, 30), TextAnchor.MiddleCenter, null, true);
+            var input = NewInput(canvas.transform, "1", new Vector2(0, 80), new Vector2(140, 48));
+
+            NewButton(canvas.transform, "BEGIN MISSION", new Vector2(0, -20), new Vector2(360, 60), () =>
             {
-                var btn = MakeButton(transform, "Btn_" + obj.missionName, obj.missionName, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(360, 30));
-                btn.transform.SetParent(content, false);
-                var captured = obj;
-                btn.onClick.AddListener(() =>
-                {
-                    mm.StartNewMission(captured);
-                    LoadDesignUI();
-                });
-            }
+                int n = 1;
+                if (input != null && int.TryParse(input.text, out int parsed)) n = Mathf.Clamp(parsed, 1, 4);
+                if (manager != null) manager.SetPlayerCount(n);
+                ShowMissionSelect();
+            });
 
-            var backBtn = MakeButton(transform, "BackButton", "Back", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.1f), new Vector2(120, 30));
-            backBtn.onClick.AddListener(() => BuildMainMenuUI());
+            NewText(canvas.transform, "Budget • Mass • Power • Data • Lifetime", 16, new Vector2(0, -160), new Vector2(900, 30), TextAnchor.MiddleCenter, new Color(.45f, .58f, .75f));
         }
 
-        private List<MissionObjective> LoadObjectives()
+        private void ShowMissionSelect()
+        {
+            BeginScreen("SELECT MISSION", "Each mission sets a science target and lifetime window");
+            var missions = LoadMissions();
+            for (int i = 0; i < missions.Count; i++)
+            {
+                var m = missions[i];
+                NewButton(canvas.transform, $"{m.missionName}  ·  {m.destination}  ·  target science {m.targetScienceValue:F0}",
+                    new Vector2(0, 240 - i * 80), new Vector2(900, 58), () =>
+                    {
+                        if (manager != null) manager.StartNewMission(m);
+                        ShowDesign();
+                    });
+            }
+            NewButton(canvas.transform, "Back", new Vector2(0, -330), new Vector2(220, 50), ShowTitle, new Color(.25f, .28f, .34f));
+        }
+
+        private List<MissionObjective> LoadMissions()
         {
             var list = new List<MissionObjective>();
-            var assets = Resources.LoadAll<TextAsset>("MissionData");
-            foreach (var a in assets)
+            foreach (var asset in Resources.LoadAll<TextAsset>("MissionData"))
             {
                 try
                 {
-                    var obj = JsonUtility.FromJson<MissionObjective>(a.text);
-                    if (obj != null) list.Add(obj);
+                    var obj = JsonUtility.FromJson<MissionObjective>(asset.text);
+                    if (obj != null && !string.IsNullOrEmpty(obj.missionName)) list.Add(obj);
                 }
-                catch { }
+                catch (Exception e) { Debug.LogWarning("Mission parse failed: " + e.Message); }
             }
             if (list.Count == 0)
-            {
-                list.Add(new MissionObjective
-                {
-                    missionName = "Apollo 11",
-                    destination = "Moon",
-                    description = "First crewed lunar landing.",
-                    targetScienceValue = 120,
-                    scienceTargets = new List<string> { "lunar_samples", "seismic_data", "laser_ranging" },
-                    minMissionLifetimeDays = 6,
-                    maxMissionLifetimeDays = 10
-                });
-            }
+                list.Add(new MissionObjective("Apollo 11", "Moon", "First crewed lunar landing.", 120,
+                    new List<string> { "lunar_samples", "seismic_data", "laser_ranging" }, 6, 10));
             return list;
         }
 
-        private static ScrollRect MakeScrollView(Transform parent, Vector2 pivot, Vector2 anchor, Vector2 sizeDelta)
+        private void ShowDesign()
         {
-            var go = new GameObject("ScrollView");
-            go.transform.SetParent(parent, false);
-            var rt = go.AddComponent<RectTransform>();
-            rt.pivot = pivot;
-            rt.anchorMin = anchor;
-            rt.anchorMax = anchor;
-            rt.anchoredPosition = Vector2.zero;
-            rt.sizeDelta = sizeDelta;
-            var sr = go.AddComponent<ScrollRect>();
-            var viewport = new GameObject("Viewport");
-            viewport.transform.SetParent(go.transform, false);
-            var vrt = viewport.AddComponent<RectTransform>();
-            vrt.anchorMin = Vector2.zero;
-            vrt.anchorMax = Vector2.one;
-            vrt.offsetMin = Vector2.zero;
-            vrt.offsetMax = Vector2.zero;
-            viewport.AddComponent<Image>().color = new Color(0.1f, 0.13f, 0.18f, 1f);
-            var mask = viewport.AddComponent<Mask>();
-            sr.viewport = vrt;
-            sr.content = vrt;
-            var content = new GameObject("Content");
-            content.transform.SetParent(viewport.transform, false);
-            var crt = content.AddComponent<RectTransform>();
-            crt.anchorMin = Vector2.zero;
-            crt.anchorMax = new Vector2(1, 0);
-            crt.pivot = new Vector2(0.5f, 1);
-            crt.anchoredPosition = Vector2.zero;
-            crt.sizeDelta = new Vector2(0, 50);
-            var vlg = content.AddComponent<VerticalLayoutGroup>();
-            vlg.childAlignment = TextAnchor.UpperCenter;
-            vlg.spacing = 8;
-            vlg.childForceExpandWidth = true;
-            vr_layout_rebuild(content);
-            return sr;
+            if (manager == null || manager.CurrentObjective == null) { ShowTitle(); return; }
+            RefreshDesignStats();
         }
 
-        private static void vr_layout_rebuild(Transform t) { }
-
-        private void LoadDesignUI()
+        private void RefreshDesignStats()
         {
-            foreach (Transform child in transform)
-                Destroy(child.gameObject);
-            var mm = MissionManager.Instance;
+            Clear();
+            Background(canvas.transform);
+            NewText(canvas.transform, "SPACECRAFT DESIGN", 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, manager.CurrentObjective.missionName + " — add subsystems, then continue", 20,
+                new Vector2(0, 352), new Vector2(1300, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
 
-            var title = MakeText(transform, "Title", "Spacecraft Design — " + mm.CurrentObjective.missionName, 18, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.9f), new Vector2(400, 30));
-            title.alignment = TextAlignmentOptions.Center;
+            var d = manager.SpacecraftDesign;
+            var c = manager.Constraints;
+            NewText(canvas.transform,
+                $"Mass {d.TotalMassKg:F0} / {c.maxMassKg:F0} kg     Power {d.TotalPowerDrawW:F0} / {c.maxPowerW:F0} W     Cost ${d.TotalCostUsd:F0} / ${c.budgetUsd:F0}",
+                20, new Vector2(0, 290), new Vector2(1300, 34), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
 
-            var stats = MakeText(transform, "Stats", "", 14, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.82f), new Vector2(400, 40));
-            stats.alignment = TextAlignmentOptions.Center;
-
-            var scroll = MakeScrollView(transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(380, 220));
-            var content = scroll.GetComponentInChildren<VerticalLayoutGroup>()?.transform ?? scroll.transform;
-
-            var types = new[] { ComponentType.Hull, ComponentType.Propulsion, ComponentType.Power, ComponentType.Communications, ComponentType.Structure, ComponentType.Thermal };
-            foreach (var t in types)
+            var types = new[] { ComponentType.Hull, ComponentType.Propulsion, ComponentType.Power,
+                                ComponentType.Communications, ComponentType.Structure, ComponentType.Thermal };
+            for (int i = 0; i < types.Length; i++)
             {
-                var btn = MakeButton(transform, "Add_" + t, "+ " + t.ToString(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(360, 28));
-                btn.transform.SetParent(content, false);
-                var captured = t;
-                btn.onClick.AddListener(() =>
-                {
-                    var designer = FindObjectOfType<SpacecraftDesigner>();
-                    designer?.AddComponentByType(captured);
-                    RefreshStats(stats);
-                });
+                int col = i % 2, row = i / 2;
+                float x = col == 0 ? -270f : 270f;
+                float y = 200f - row * 72f;
+                var type = types[i];
+                NewButton(canvas.transform, "+  " + type, new Vector2(x, y), new Vector2(480, 56), () => AddDefaultComponent(type));
             }
 
-            var viol = MakeText(transform, "Violations", "", 13, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.45f), new Vector2(380, 60));
-            viol.alignment = TextAlignmentOptions.Center;
+            var designer = FindFirstObjectByType<SpacecraftDesigner>();
+            var violations = designer != null ? designer.GetConstraintViolations() : new List<string>();
+            string vText = violations.Count == 0 ? "All constraints satisfied." : "Violations:\n• " + string.Join("\n• ", violations);
+            NewText(canvas.transform, vText, 17, new Vector2(0, -55), new Vector2(1150, 120), TextAnchor.MiddleCenter,
+                violations.Count == 0 ? new Color(.45f, .95f, .60f) : new Color(1f, .45f, .42f));
 
-            var nextBtn = MakeButton(transform, "NextButton", "Next: Instruments", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.15f), new Vector2(200, 40));
-            nextBtn.onClick.AddListener(() => LoadInstrumentUI());
-
-            RefreshStats(stats);
-            RefreshViolations(viol, nextBtn);
+            NewButton(canvas.transform, "Back", new Vector2(-270, -330), new Vector2(220, 50), ShowMissionSelect, new Color(.25f, .28f, .34f));
+            var next = NewButton(canvas.transform, "Next: Instruments", new Vector2(270, -330), new Vector2(280, 50), ShowInstruments);
+            next.interactable = designer == null || violations.Count == 0;
         }
 
-        private void RefreshStats(TMP_Text stats)
+        private void AddDefaultComponent(ComponentType type)
         {
-            if (stats == null) return;
-            var mm = MissionManager.Instance;
-            if (mm == null) return;
-            var d = mm.SpacecraftDesign;
-            stats.text = $"Mass: {d.TotalMassKg:F0} kg / {mm.Constraints.maxMassKg:F0} kg   " +
-                         $"Power: {d.TotalPowerDrawW:F0} W / {mm.Constraints.maxPowerW:F0} W   " +
-                         $"Cost: ${d.TotalCostUsd:F0} / ${mm.Constraints.budgetUsd:F0}";
+            var comp = MakeDefaultComponent(type);
+            var designer = FindFirstObjectByType<SpacecraftDesigner>();
+            if (designer != null && comp != null) designer.AddComponent(comp);
+            RefreshDesignStats();
         }
 
-        private void RefreshViolations(TMP_Text viol, Button nextBtn)
+        private static SpacecraftComponent MakeDefaultComponent(ComponentType type)
         {
-            var designer = FindObjectOfType<SpacecraftDesigner>();
-            var v = designer == null ? new List<string>() : designer.GetConstraintViolations();
-            viol.text = v.Count > 0 ? "Violations:\n• " + string.Join("\n• ", v) : "All constraints satisfied.";
-            viol.color = v.Count > 0 ? Color.red : Color.green;
-            if (nextBtn != null) nextBtn.interactable = v.Count == 0;
-        }
-
-        private void LoadInstrumentUI()
-        {
-            foreach (Transform child in transform)
-                Destroy(child.gameObject);
-            var mm = MissionManager.Instance;
-
-            var title = MakeText(transform, "Title", "Instruments — " + mm.CurrentObjective.destination, 18, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.9f), new Vector2(400, 30));
-            title.alignment = TextAlignmentOptions.Center;
-
-            var info = MakeText(transform, "Info", "", 14, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.83f), new Vector2(400, 40));
-            info.alignment = TextAlignmentOptions.Center;
-
-            var scroll = MakeScrollView(transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(380, 220));
-            var content = scroll.GetComponentInChildren<VerticalLayoutGroup>()?.transform ?? scroll.transform;
-
-            var instruments = GetDefaultInstruments(mm.CurrentObjective.destination);
-            foreach (var inst in instruments)
+            switch (type)
             {
-                var row = new GameObject("Row_" + inst.instrumentId);
-                row.transform.SetParent(content, false);
-                var rrt = row.AddComponent<RectTransform>();
-                rrt.anchorMin = Vector2.zero;
-                rrt.anchorMax = new Vector2(1, 0);
-                rrt.pivot = new Vector2(0.5f, 1);
-                rrt.sizeDelta = new Vector2(0, 30);
-                var hl = row.AddComponent<HorizontalLayoutGroup>();
-                hl.childForceExpandHeight = true;
-                hl.spacing = 8;
-                var label = MakeText(row.transform, "Label", inst.displayName + " (" + inst.massKg + " kg, " + inst.powerDrawW + " W)", 13, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(200, 20));
-                var btn = MakeButton(row.transform, "Toggle", "+", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(40, 22));
-                btn.transform.SetParent(row.transform, false);
-                var captured = inst;
-                btn.onClick.AddListener(() =>
+                case ComponentType.Hull: return new SpacecraftComponent("hull_cmd", "Command Module Hull", type, 5500, 500, 45_000_000, 0, .98, "Pressure hull.");
+                case ComponentType.Propulsion: return new SpacecraftComponent("prop_sm", "Service Module Propulsion", type, 12000, 200, 80_000_000, 0, .95, "Main engine and RCS.");
+                case ComponentType.Power: return new SpacecraftComponent("power_fc", "Fuel Cell Power", type, 1200, 50, 35_000_000, 0, .97, "Power generation.");
+                case ComponentType.Communications: return new SpacecraftComponent("comm_hga", "High-Gain Antenna", type, 300, 300, 25_000_000, 64, .96, "Deep-space comms.");
+                case ComponentType.Structure: return new SpacecraftComponent("struct_truss", "Structural Truss", type, 2000, 0, 15_000_000, 0, .99, "Primary structure.");
+                case ComponentType.Thermal: return new SpacecraftComponent("thermal_rad", "Thermal Radiators", type, 800, 100, 20_000_000, 0, .97, "Heat rejection.");
+                default: return null;
+            }
+        }
+
+        private void ShowInstruments()
+        {
+            if (manager == null || manager.CurrentObjective == null) { ShowTitle(); return; }
+            Clear();
+            Background(canvas.transform);
+            NewText(canvas.transform, "SCIENCE INSTRUMENTS", 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, "Destination: " + manager.CurrentObjective.destination + " — toggle instruments for the mission", 20,
+                new Vector2(0, 352), new Vector2(1300, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
+
+            var d = manager.SpacecraftDesign;
+            NewText(canvas.transform,
+                $"Instruments {d.instruments.Count}     Science/day {d.TotalSciencePerDay:F1}     Data/day {d.TotalDataVolumeGbPerDay:F2} GB",
+                20, new Vector2(0, 290), new Vector2(1300, 34), TextAnchor.MiddleCenter, new Color(.85f, .90f, .98f));
+
+            var options = GetInstrumentsFor(manager.CurrentObjective.destination);
+            for (int i = 0; i < options.Count; i++)
+            {
+                var inst = options[i];
+                float y = 205f - i * 62f;
+                bool added = d.instruments.Exists(x => x.instrumentId == inst.instrumentId);
+                NewText(canvas.transform,
+                    $"{inst.displayName}   ·   {inst.massKg:F0} kg   ·   {inst.powerDrawW:F0} W   ·   science {inst.scienceValue:F0}/day",
+                    18, new Vector2(-120, y), new Vector2(760, 34), TextAnchor.MiddleLeft, new Color(.88f, .92f, .98f));
+                NewButton(canvas.transform, added ? "Remove" : "Add", new Vector2(400, y), new Vector2(160, 46), () =>
                 {
-                    var designer = FindObjectOfType<SpacecraftDesigner>();
-                    var design = mm.SpacecraftDesign;
-                    bool has = design.instruments.Contains(captured);
-                    if (has) designer.RemoveInstrument(captured);
-                    else designer.AddInstrument(captured);
-                    RefreshInstrumentInfo(info);
-                    // rebuild toggle text
-                    var btntxt = btn.GetComponentInChildren<TextMeshProUGUI>();
-                    if (btntxt != null) btntxt.text = has ? "+" : "–";
-                });
+                    var existing = d.instruments.Find(x => x.instrumentId == inst.instrumentId);
+                    if (existing != null) designer?.RemoveInstrument(existing); else designer?.AddInstrument(inst);
+                    ShowInstruments();
+                }, added ? new Color(.55f, .28f, .28f) : new Color(.20f, .48f, .32f));
             }
 
-            var nextBtn = MakeButton(transform, "NextButton", "Next: Launch", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.1f), new Vector2(200, 40));
-            nextBtn.onClick.AddListener(() => LoadLaunchUI());
-
-            RefreshInstrumentInfo(info);
+            NewButton(canvas.transform, "Back", new Vector2(-270, -330), new Vector2(220, 50), ShowDesign, new Color(.25f, .28f, .34f));
+            var next = NewButton(canvas.transform, "Next: Launch", new Vector2(270, -330), new Vector2(280, 50), ShowLaunch);
+            next.interactable = d.instruments.Count > 0;
         }
 
-        private List<ScientificInstrument> GetDefaultInstruments(string destination)
+        private SpacecraftDesigner designer => FindFirstObjectByType<SpacecraftDesigner>();
+
+        private static List<ScientificInstrument> GetInstrumentsFor(string destination)
         {
             var all = new List<ScientificInstrument>
             {
-                new ScientificInstrument("inst_camera", "High-Res Camera", 80, 120, 5.0, 15, new List<string>{"Moon","Mars","LEO"}, "Surface imaging."),
+                new ScientificInstrument("inst_camera", "High-Res Camera", 80, 120, 5.0, 15, new List<string>{"Moon","Mars","LEO"}, "Imaging."),
                 new ScientificInstrument("inst_spectrometer", "Infrared Spectrometer", 60, 90, 2.0, 10, new List<string>{"Moon","Mars","LEO"}, "Mineral analysis."),
                 new ScientificInstrument("inst_seismometer", "Seismometer", 45, 60, 0.5, 8, new List<string>{"Moon","Mars"}, "Seismic monitoring."),
-                new ScientificInstrument("inst_solar_wind", "Solar Wind Experiment", 25, 40, 1.0, 6, new List<string>{"Moon","LEO"}, "Solar wind measurement."),
-                new ScientificInstrument("inst_laser_reflector", "Laser Retroreflector", 15, 20, 0.1, 4, new List<string>{"Moon"}, "Earth-Moon ranging."),
+                new ScientificInstrument("inst_solar_wind", "Solar Wind Experiment", 25, 40, 1.0, 6, new List<string>{"Moon","LEO"}, "Solar wind."),
+                new ScientificInstrument("inst_laser_reflector", "Laser Retroreflector", 15, 20, 0.1, 4, new List<string>{"Moon"}, "Lunar ranging."),
             };
             var result = new List<ScientificInstrument>();
-            foreach (var i in all)
-                if (i.compatibleDestinations.Contains(destination)) result.Add(i);
+            foreach (var i in all) if (i.compatibleDestinations.Contains(destination)) result.Add(i);
             return result;
         }
 
-        private void RefreshInstrumentInfo(TMP_Text info)
+        private void ShowLaunch()
         {
-            if (info == null) return;
-            var mm = MissionManager.Instance;
-            var d = mm.SpacecraftDesign;
-            info.text = $"Instruments: {d.instruments.Count}   Science/day: {d.TotalSciencePerDay:F1}   Data/day: {d.TotalDataVolumeGbPerDay:F2} GB";
+            if (manager == null || manager.CurrentObjective == null) { ShowTitle(); return; }
+            Clear();
+            Background(canvas.transform);
+            NewText(canvas.transform, "LAUNCH VEHICLE & ORBIT", 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+            NewText(canvas.transform, "Select one launch vehicle and one orbit", 20,
+                new Vector2(0, 352), new Vector2(1300, 36), TextAnchor.MiddleCenter, new Color(.62f, .72f, .85f));
+
+            NewText(canvas.transform, "LAUNCH VEHICLES", 20, new Vector2(-320, 285), new Vector2(560, 30), TextAnchor.MiddleCenter, new Color(.55f, .72f, .95f), true);
+            var vehicles = GetVehicles();
+            var selectedVehicle = manager.SpacecraftDesign.launchVehicle;
+            for (int i = 0; i < vehicles.Count; i++)
+            {
+                var v = vehicles[i];
+                bool sel = selectedVehicle != null && selectedVehicle.vehicleId == v.vehicleId;
+                NewButton(canvas.transform, $"{v.displayName}\n${v.costUsd / 1_000_000:F0}M · {v.maxPayloadKg:F0} kg",
+                    new Vector2(-320, 220 - i * 72), new Vector2(560, 62), () =>
+                    {
+                        designer?.SetLaunchVehicle(v);
+                        ShowLaunch();
+                    }, sel ? new Color(.20f, .55f, .40f) : new Color(.16f, .34f, .58f), 17);
+            }
+
+            NewText(canvas.transform, "ORBITS", 20, new Vector2(320, 285), new Vector2(560, 30), TextAnchor.MiddleCenter, new Color(.55f, .72f, .95f), true);
+            var orbits = GetOrbits();
+            var selectedOrbit = manager.SpacecraftDesign.orbit;
+            for (int i = 0; i < orbits.Count; i++)
+            {
+                var o = orbits[i];
+                bool sel = selectedOrbit != null && selectedOrbit.orbitId == o.orbitId;
+                NewButton(canvas.transform, $"{o.displayName}\n{o.deltaVRequiredKmS:F0} km/s · science ×{o.scienceMultiplier:F1}",
+                    new Vector2(320, 220 - i * 72), new Vector2(560, 62), () =>
+                    {
+                        designer?.SetOrbit(o);
+                        ShowLaunch();
+                    }, sel ? new Color(.20f, .55f, .40f) : new Color(.16f, .34f, .58f), 17);
+            }
+
+            var d = manager.SpacecraftDesign;
+            string summary = $"Spacecraft mass {d.TotalMassKg:F0} kg · power {d.TotalPowerDrawW:F0} W · cost ${d.TotalCostUsd:F0}\n" +
+                             $"Vehicle: {(selectedVehicle != null ? selectedVehicle.displayName : "none")}   Orbit: {(selectedOrbit != null ? selectedOrbit.displayName : "none")}";
+            NewText(canvas.transform, summary, 18, new Vector2(0, -90), new Vector2(1250, 70), TextAnchor.MiddleCenter, new Color(.88f, .92f, .98f));
+
+            NewButton(canvas.transform, "Back", new Vector2(-270, -330), new Vector2(220, 50), ShowInstruments, new Color(.25f, .28f, .34f));
+            NewButton(canvas.transform, "SIMULATE MISSION", new Vector2(270, -330), new Vector2(300, 50), Simulate, new Color(.55f, .38f, .12f));
         }
 
-        private void LoadLaunchUI()
-        {
-            foreach (Transform child in transform)
-                Destroy(child.gameObject);
-            var mm = MissionManager.Instance;
-
-            var title = MakeText(transform, "Title", "Launch Vehicle & Orbit", 18, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.9f), new Vector2(400, 30));
-            title.alignment = TextAlignmentOptions.Center;
-
-            var scroll = MakeScrollView(transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(380, 300));
-            var content = scroll.GetComponentInChildren<VerticalLayoutGroup>()?.transform ?? scroll.transform;
-
-            var vehicles = GetDefaultVehicles();
-            var selectedVehicle = new LaunchVehicle();
-            var orbits = GetDefaultOrbits();
-            var selectedOrbit = new OrbitDefinition();
-
-            var sum = MakeText(transform, "Summary", "", 13, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.28f), new Vector2(380, 60));
-            sum.alignment = TextAlignmentOptions.Center;
-
-            void RefreshSummary()
-            {
-                var d = mm.SpacecraftDesign;
-                var vtxt = selectedVehicle.vehicleId == null ? "(none)" : selectedVehicle.displayName;
-                var otxt = selectedOrbit.orbitId == null ? "(none)" : selectedOrbit.displayName;
-                sum.text = $"Launch: {vtxt}\nOrbit: {otxt}\nMass: {d.TotalMassKg:F0} kg (payload cap: {(selectedVehicle.maxPayloadKg>0?selectedVehicle.maxPayloadKg:0):F0} kg)";
-            }
-
-            var vLabel = MakeText(transform, "VLabel", "Launch Vehicle", 14, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.83f), new Vector2(380, 20));
-            vLabel.alignment = TextAlignmentOptions.Center;
-            vLabel.transform.SetParent(content, false);
-
-            foreach (var v in vehicles)
-            {
-                var btn = MakeButton(transform, "V_" + v.vehicleId, v.displayName + " — $" + v.costUsd.ToString("F0") + " — " + v.maxPayloadKg.ToString("F0") + " kg", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(350, 26));
-                btn.transform.SetParent(content, false);
-                var captured = v;
-                btn.onClick.AddListener(() =>
-                {
-                    selectedVehicle = captured;
-                    mm.SpacecraftDesign.launchVehicle = captured;
-                    RefreshSummary();
-                });
-            }
-
-            var oLabel = MakeText(transform, "OLabel", "Orbit", 14, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.55f), new Vector2(380, 20));
-            oLabel.alignment = TextAlignmentOptions.Center;
-            oLabel.transform.SetParent(content, false);
-
-            foreach (var o in orbits)
-            {
-                var btn = MakeButton(transform, "O_" + o.orbitId, o.displayName + " — " + o.deltaVRequiredKmS.ToString("F0") + " km/s", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(350, 26));
-                btn.transform.SetParent(content, false);
-                var captured = o;
-                btn.onClick.AddListener(() =>
-                {
-                    selectedOrbit = captured;
-                    mm.SpacecraftDesign.orbit = captured;
-                    RefreshSummary();
-                });
-            }
-
-            var nextBtn = MakeButton(transform, "NextButton", "Simulate Mission", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.1f), new Vector2(200, 40));
-            nextBtn.onClick.AddListener(() =>
-            {
-                var designer = FindObjectOfType<SpacecraftDesigner>();
-                var v = designer.GetConstraintViolations();
-                if (v.Count > 0)
-                {
-                    sum.text = "Fix violations first:\n• " + string.Join("\n• ", v);
-                    sum.color = Color.red;
-                    return;
-                }
-                var engine = FindObjectOfType<SimulationEngine>();
-                engine?.RunSimulation();
-                LoadResultsUI();
-            });
-        }
-
-        private List<LaunchVehicle> GetDefaultVehicles()
+        private static List<LaunchVehicle> GetVehicles()
         {
             return new List<LaunchVehicle>
             {
-                new LaunchVehicle("lv_saturn_v", "Saturn V", 185000000, 140000, 12000, new List<string>{"LEO","Lunar"}, 0.96, ""),
-                new LaunchVehicle("lv_falcon_heavy", "Falcon Heavy", 150000000, 63800, 10000, new List<string>{"LEO","GTO","Lunar"}, 0.94, ""),
-                new LaunchVehicle("lv_atlas_v", "Atlas V", 110000000, 18800, 6000, new List<string>{"LEO","GTO"}, 0.97, ""),
-                new LaunchVehicle("lv_delta_iv", "Delta IV Heavy", 350000000, 28790, 11000, new List<string>{"LEO","GTO","Lunar"}, 0.95, ""),
+                new LaunchVehicle("lv_saturn_v", "Saturn V", 185000000, 140000, 12000, new List<string>{"LEO","Lunar"}, .96, ""),
+                new LaunchVehicle("lv_falcon_heavy", "Falcon Heavy", 150000000, 63800, 10000, new List<string>{"LEO","GTO","Lunar"}, .94, ""),
+                new LaunchVehicle("lv_atlas_v", "Atlas V", 110000000, 18800, 6000, new List<string>{"LEO","GTO"}, .97, ""),
+                new LaunchVehicle("lv_delta_iv", "Delta IV Heavy", 350000000, 28790, 11000, new List<string>{"LEO","GTO","Lunar"}, .95, ""),
             };
         }
 
-        private List<OrbitDefinition> GetDefaultOrbits()
+        private static List<OrbitDefinition> GetOrbits()
         {
             return new List<OrbitDefinition>
             {
-                new OrbitDefinition("LEO", "Low Earth Orbit", 9400, 1.0, 0.1, ""),
-                new OrbitDefinition("GTO", "Geostationary Transfer", 10500, 1.2, 0.25, ""),
+                new OrbitDefinition("LEO", "Low Earth Orbit", 9400, 1.0, .1, ""),
+                new OrbitDefinition("GTO", "Geostationary Transfer", 10500, 1.2, .25, ""),
                 new OrbitDefinition("Lunar", "Lunar Orbit", 12000, 2.0, 2.5, ""),
             };
         }
 
-        private void LoadResultsUI()
+        private void Simulate()
         {
-            foreach (Transform child in transform)
-                Destroy(child.gameObject);
-            var mm = MissionManager.Instance;
-            var result = mm.SimulationResult;
-
-            var title = MakeText(transform, "Title", "Mission Results", 20, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.88f), new Vector2(400, 30));
-            title.alignment = TextAlignmentOptions.Center;
-
-            var status = MakeText(transform, "Status", result.missionSuccess ? "MISSION SUCCESS" : "MISSION FAILED", 20, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.75f), new Vector2(400, 30));
-            status.alignment = TextAlignmentOptions.Center;
-            status.color = result.missionSuccess ? Color.green : Color.red;
-
-            var score = MakeText(transform, "Score", "Score: " + result.score.ToString("F1") + " / 100", 16, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.65f), new Vector2(400, 25));
-            score.alignment = TextAlignmentOptions.Center;
-
-            var feedback = MakeText(transform, "Feedback", string.Join("\n", result.feedbackMessages), 12, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.4f), new Vector2(380, 100));
-            feedback.alignment = TextAlignmentOptions.Center;
-
-            var restart = MakeButton(transform, "Restart", "Design New Mission", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.1f), new Vector2(220, 40));
-            restart.onClick.AddListener(() =>
+            var des = designer;
+            var violations = des != null ? des.GetConstraintViolations() : new List<string>();
+            if (violations.Count > 0)
             {
-                mm.ResetMission();
-                BuildMainMenuUI();
-            });
+                NewText(canvas.transform, "Fix these first:\n• " + string.Join("\n• ", violations), 18,
+                    new Vector2(0, -180), new Vector2(1100, 90), TextAnchor.MiddleCenter, new Color(1f, .45f, .42f));
+                return;
+            }
+            var engine = FindFirstObjectByType<SimulationEngine>();
+            if (engine == null) { Debug.LogError("No SimulationEngine found."); return; }
+            engine.RunSimulation();
+            ShowResults();
+        }
+
+        private void ShowResults()
+        {
+            var result = manager != null ? manager.SimulationResult : null;
+            if (result == null) { ShowTitle(); return; }
+            Clear();
+            Background(canvas.transform);
+            NewText(canvas.transform, "MISSION RESULTS", 40, new Vector2(0, 400), new Vector2(1400, 60), TextAnchor.MiddleCenter, null, true);
+
+            NewText(canvas.transform, result.missionSuccess ? "MISSION SUCCESS" : "MISSION FAILED", 46,
+                new Vector2(0, 315), new Vector2(900, 60), TextAnchor.MiddleCenter,
+                result.missionSuccess ? new Color(.40f, .95f, .55f) : new Color(1f, .42f, .40f), true);
+
+            NewText(canvas.transform, $"Mission Score: {result.score:F1} / 100", 28,
+                new Vector2(0, 250), new Vector2(900, 44), TextAnchor.MiddleCenter, new Color(.90f, .94f, 1f), true);
+
+            NewText(canvas.transform, string.Join("\n", result.feedbackMessages), 17,
+                new Vector2(0, 40), new Vector2(1250, 280), TextAnchor.UpperCenter, new Color(.82f, .88f, .96f));
+
+            NewButton(canvas.transform, "DESIGN ANOTHER MISSION", new Vector2(0, -330), new Vector2(380, 56), () =>
+            {
+                if (manager != null) manager.ResetMission();
+                ShowTitle();
+            }, new Color(.18f, .42f, .62f));
         }
     }
 }

@@ -115,8 +115,8 @@ namespace SpaceMissionDesign.Game
             if (design.launchVehicle != null && design.orbit != null &&
                 !design.launchVehicle.compatibleOrbits.Contains(design.orbit.orbitId))
                 violations.Add("Launch vehicle is not compatible with selected orbit.");
-            if (design.TotalMassKg > design.launchVehicle?.maxPayloadKg ?? 0)
-                violations.Add($"Spacecraft mass exceeds launch vehicle payload capacity.");
+            if (design.launchVehicle != null && design.TotalMassKg > design.launchVehicle.maxPayloadKg)
+                violations.Add("Spacecraft mass exceeds launch vehicle payload capacity.");
 
             return violations;
         }

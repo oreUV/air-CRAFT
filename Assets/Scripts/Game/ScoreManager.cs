@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using SpaceMissionDesign.Data;
 
@@ -90,8 +91,7 @@ namespace SpaceMissionDesign.Game
             manager.SetPlayerCount(playerCount);
             for (int i = 0; i < names.Count && i < playerCount; i++)
                 manager.SetPlayerName(i, names[i]);
-            manager.currentPlayerIndex = 0;
-            OnTurnChanged?.Invoke(0);
+            OnTurnChanged?.Invoke(manager.CurrentPlayerIndex);
         }
 
         public void EndTurn()
