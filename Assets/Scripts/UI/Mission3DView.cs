@@ -605,7 +605,7 @@ namespace SpaceMissionDesign.UI
                         float fr = stage1Radius + .12f;
                         StackSaturnVPart(parts, "fin (print 4)", root,
                             new Vector3(Mathf.Cos(a) * fr, .3f, Mathf.Sin(a) * fr),
-                            partTargetHeight["S-IC bottom"], grey, yaw: a * Mathf.Rad2Deg);
+                            1.6f, grey, yaw: a * Mathf.Rad2Deg);
                     }
                 }
             }
