@@ -282,7 +282,7 @@ namespace SpaceMissionDesign.UI
             var types = new[] { ComponentType.Hull, ComponentType.Propulsion, ComponentType.Power, ComponentType.Communications, ComponentType.Structure, ComponentType.Thermal };
             foreach (var t in types)
             {
-                var btn = MakeButton(transform, "Add_" + t, "+ "t.ToString(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(360, 28));
+                var btn = MakeButton(transform, "Add_" + t, "+ " + t.ToString(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(360, 28));
                 btn.transform.SetParent(content, false);
                 var captured = t;
                 btn.onClick.AddListener(() =>
