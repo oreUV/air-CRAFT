@@ -12,7 +12,7 @@ namespace SpaceMissionDesign.UI
         /// <summary>Fired once when the full Earth->Moon->Earth flight completes (or is skipped).</summary>
         public static Action MissionComplete;
 
-        public enum FlightPhase { PreLaunch, Countdown, Ignition, Ascent, TransitToMoon, MoonArrival, MoonStay, ReturnToEarth, EarthArrival, Complete }
+        public enum FlightPhase { PreLaunch, Countdown, Ignition, Ascent, TransitToMoon, MoonArrival, MoonLanding, MoonStay, MoonLaunch, ReturnToEarth, EarthArrival, Complete }
 
         private Transform rocketRoot;
         private Transform focus;
@@ -98,6 +98,7 @@ namespace SpaceMissionDesign.UI
         // steering the camera. C changes the camera angle; the rocket is flown with WASD.
         private float rocketPitch, rocketYaw;
         private bool rocketManual;
+        private bool moonLanded;
 
         public float Warp => WarpSteps[Mathf.Clamp(warpIndex, 0, WarpSteps.Length - 1)];
 
@@ -191,7 +192,9 @@ namespace SpaceMissionDesign.UI
                     case FlightPhase.Ascent: return $"ASCENT  ·  ALT {AltitudeUnits * kmPerUnit:N0} km";
                     case FlightPhase.TransitToMoon: return $"TRANSLUNAR  ·  MOON {Vector3.Distance(rocketRoot != null ? rocketRoot.position : EarthCenter, MoonCenter) * kmPerLunarUnit:N0} km";
                     case FlightPhase.MoonArrival: return "LUNAR APPROACH  ·  BRAKING";
-                    case FlightPhase.MoonStay: return $"LUNAR ORBIT  ·  {(phaseElapsed - MoonStayTotal < 0 ? $"T-{MoonStayTotal - (phaseElapsed - MoonStayTotal):F0}s" : "")}";
+                    case FlightPhase.MoonLanding: return "LUNAR LANDING  ·  DOCKING ON SURFACE";
+                    case FlightPhase.MoonStay: return $"LUNAR SURFACE  ·  {(phaseElapsed - MoonStayTotal < 0 ? $"T-{MoonStayTotal - (phaseElapsed - MoonStayTotal):F0}s" : "")}";
+                    case FlightPhase.MoonLaunch: return "LUNAR LAUNCH  ·  ASCENDING TO ORBIT";
                     case FlightPhase.ReturnToEarth: return $"TRANS-EARTH  ·  HOME {Vector3.Distance(rocketRoot != null ? rocketRoot.position : MoonCenter, new Vector3(10f, 0f, 0f)) * kmPerLunarUnit:N0} km";
                     case FlightPhase.EarthArrival: return "ENTRY  ·  DESCENDING";
                     default: return "MISSION COMPLETE";
@@ -1352,6 +1355,7 @@ namespace SpaceMissionDesign.UI
             thrustMul = 1f;
             engineCut = false;
             rocketPitch = 0f; rocketYaw = 0f; rocketManual = false;
+            moonLanded = false;
             if (flame != null) flame.gameObject.SetActive(false);
             if (exhaust != null)
             {
@@ -1622,6 +1626,15 @@ namespace SpaceMissionDesign.UI
         /// crosses the top of the atmosphere, because that is the point where compressing
         /// time stops spoiling the launch and starts being useful.
         /// </summary>
+        // Warp keys, split into the two ladders. Keys 1-4 pick the step that is valid
+        // at the current altitude (1/2/5/10 in air; 50/100/1000/10000 in space). T cycles.
+        private static readonly KeyCode[] WarpKeys = {
+            KeyCode.Alpha1, KeyCode.Alpha2, KeyCode.Alpha3, KeyCode.Alpha4,
+            KeyCode.Alpha5, KeyCode.Alpha6, KeyCode.Alpha7, KeyCode.Alpha8,
+            KeyCode.Keypad1, KeyCode.Keypad2, KeyCode.Keypad3, KeyCode.Keypad4,
+            KeyCode.Keypad5, KeyCode.Keypad6, KeyCode.Keypad7, KeyCode.Keypad8
+        };
+
         private void UpdateWarp()
         {
             bool space = AltitudeUnits >= AtmosphereTop;
@@ -1636,7 +1649,7 @@ namespace SpaceMissionDesign.UI
 
             for (int i = 0; i < WarpSteps.Length; i++)
             {
-                if (Input.GetKeyDown(KeyCode.Alpha1 + i) || Input.GetKeyDown(KeyCode.Keypad1 + i))
+                if (Input.GetKeyDown(WarpKeys[i]) || Input.GetKeyDown(WarpKeys[i + WarpSteps.Length]))
                     warpIndex = Mathf.Clamp(i, lo, hi);
             }
 
@@ -1755,6 +1768,33 @@ namespace SpaceMissionDesign.UI
 
                     if (distMoonSurf < 60f)
                     {
+                        // Touch down and dock on the lunar surface.
+                        phase = FlightPhase.MoonLanding;
+                        phaseElapsed = 0f;
+                        moonLanded = false;
+                        SetBurn(false);
+                    }
+                    break;
+                }
+
+                case FlightPhase.MoonLanding:
+                {
+                    // Final descent to the surface, then dock upright.
+                    float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
+                    float brake = Mathf.Clamp01(1f - distMoonSurf / 60f);
+                    flightSpeed = Mathf.Lerp(.6f, .15f, brake * brake);
+                    AdvanceToward(ref pos, MoonCenter, flightSpeed, mv);
+
+                    // Nose points up (away from Moon center) once on the surface.
+                    Vector3 radial = (pos - MoonCenter).normalized;
+                    Quaternion want = Quaternion.FromToRotation(Vector3.up, radial);
+                    rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-3f * dt));
+
+                    if (distMoonSurf <= 3f && !moonLanded)
+                    {
+                        pos = MoonCenter + radial * (MoonR + 3f);
+                        rocketRoot.position = pos;
+                        moonLanded = true;
                         phase = FlightPhase.MoonStay;
                         phaseElapsed = 0f;
                         MoonStayClock = 0f;
@@ -1765,19 +1805,43 @@ namespace SpaceMissionDesign.UI
 
                 case FlightPhase.MoonStay:
                 {
-                    // Glide around the Moon while the crew does science.
+                    // Rested on the lunar surface while the crew does science.
+                    if (!moonLanded)
+                    {
+                        // Should not happen, but snap down if it does.
+                        Vector3 radial = (pos - MoonCenter).normalized;
+                        pos = MoonCenter + radial * (MoonR + 3f);
+                        rocketRoot.position = pos;
+                        moonLanded = true;
+                    }
                     MoonStayClock += dt;
-                    Vector3 orbitNormal = Vector3.Cross(toMoon, Vector3.right).normalized;
-                    Vector3 a = Vector3.Cross(orbitNormal, toMoon).normalized;
-                    Vector3 b = orbitNormal;
-                    float ang = MoonStayClock * .55f;
-                    pos = MoonCenter + (a * Mathf.Cos(ang) + b * Mathf.Sin(ang)) * (MoonR + 85f);
 
                     if (MoonStayClock >= MoonStayTotal)
+                    {
+                        phase = FlightPhase.MoonLaunch;
+                        phaseElapsed = 0f;
+                        SetBurn(true);
+                    }
+                    break;
+                }
+
+                case FlightPhase.MoonLaunch:
+                {
+                    // Lift off from the surface and climb back to lunar orbit.
+                    float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
+                    float climb = Mathf.Clamp01(distMoonSurf / 85f);
+                    flightSpeed = Mathf.Lerp(.15f, 2f, climb * climb);
+                    Vector3 radial = (pos - MoonCenter).normalized;
+                    pos += radial * (flightSpeed * mv);
+                    rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, Quaternion.FromToRotation(Vector3.up, radial), 1f - Mathf.Exp(-3f * dt));
+
+                    if (distMoonSurf >= 85f)
                     {
                         phase = FlightPhase.ReturnToEarth;
                         phaseElapsed = 0f;
                         flightSpeed = 2f;
+                        // Only the small command module returns - shed the lander mass.
+                        rocketRoot.localScale = Vector3.one * .35f;
                         SetBurn(true);
                     }
                     break;
@@ -1834,25 +1898,29 @@ namespace SpaceMissionDesign.UI
             rocketRoot.position = pos;
 
             // Nose orientation: WASD pitches/yaws the vehicle directly (not the camera).
-            // When no WASD is held the nose auto-faces the flight direction.
-            bool wantManual = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.A) ||
-                              Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.D);
-            if (wantManual) rocketManual = true;
-            if (rocketManual)
+            // Moon landing/launch set their own attitude; everything else either follows
+            // manual WASD or auto-faces the flight direction.
+            if (phase != FlightPhase.MoonLanding && phase != FlightPhase.MoonLaunch)
             {
-                float rate = 90f * dt * thrustMul;
-                if (Input.GetKey(KeyCode.W)) rocketPitch += rate;
-                if (Input.GetKey(KeyCode.S)) rocketPitch -= rate;
-                if (Input.GetKey(KeyCode.A)) rocketYaw -= rate;
-                if (Input.GetKey(KeyCode.D)) rocketYaw += rate;
-                rocketPitch = Mathf.Clamp(rocketPitch, -85f, 85f);
-                Quaternion want = Quaternion.Euler(rocketPitch, rocketYaw, 0f);
-                rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-6f * dt));
-            }
-            else
-            {
-                Quaternion want = Quaternion.FromToRotation(Vector3.up, flightDir);
-                rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-2.2f * dt));
+                bool wantManual = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.A) ||
+                                  Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.D);
+                if (wantManual) rocketManual = true;
+                if (rocketManual)
+                {
+                    float rate = 90f * dt * thrustMul;
+                    if (Input.GetKey(KeyCode.W)) rocketPitch += rate;
+                    if (Input.GetKey(KeyCode.S)) rocketPitch -= rate;
+                    if (Input.GetKey(KeyCode.A)) rocketYaw -= rate;
+                    if (Input.GetKey(KeyCode.D)) rocketYaw += rate;
+                    rocketPitch = Mathf.Clamp(rocketPitch, -85f, 85f);
+                    Quaternion want = Quaternion.Euler(rocketPitch, rocketYaw, 0f);
+                    rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-6f * dt));
+                }
+                else
+                {
+                    Quaternion want = Quaternion.FromToRotation(Vector3.up, flightDir);
+                    rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-2.2f * dt));
+                }
             }
         }
 
