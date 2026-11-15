@@ -84,8 +84,8 @@ namespace SpaceMissionDesign.UI
         // 50x / 100x / 1000x / 10000x. Keys 1-7 pick a step (clamped to the ladder that is
         // valid at the current altitude), T cycles through that ladder.
         public const float AtmosphereTop = 900f;          // ~100 km, the edge of space
-        private static readonly float[] WarpSteps = { 1f, 2f, 5f, 50f, 100f, 1000f, 10000f };
-        private const int WarpInAtmosphereCount = 3;
+        private static readonly float[] WarpSteps = { 1f, 2f, 5f, 10f, 50f, 100f, 1000f, 10000f };
+        private const int WarpInAtmosphereCount = 4;
         private int warpIndex;
         private bool warpInSpace;
 
@@ -94,11 +94,10 @@ namespace SpaceMissionDesign.UI
         private float thrustMul = 1f;
         private bool engineCut;
 
-        // Haze shell materials, kept so they can fade out once the vehicle climbs out of
-        // the atmosphere - seen from deep space they would otherwise stack and wash the
-        // whole planet pale.
-        private readonly List<Material> hazeMats = new List<Material>();
-        private readonly List<float> hazeAlpha = new List<float>();
+        // Manual rocket attitude: WASD pitches/yaws the vehicle nose directly instead of
+        // steering the camera. C changes the camera angle; the rocket is flown with WASD.
+        private float rocketPitch, rocketYaw;
+        private bool rocketManual;
 
         public float Warp => WarpSteps[Mathf.Clamp(warpIndex, 0, WarpSteps.Length - 1)];
 
@@ -884,12 +883,8 @@ namespace SpaceMissionDesign.UI
         /// </summary>
         private void BuildAtmosphere()
         {
-            // Thicknesses chosen so the camera at the pad is INSIDE all of them (a haze
-            // dome overhead, not a band across the sky) and each one is left behind in
-            // turn on the way up.
-            AddShell("Atmosphere - troposphere", EarthR + 14f, new Color(.72f, .86f, 1f, .040f), 2990);
-            AddShell("Atmosphere - stratosphere", EarthR + 260f, new Color(.48f, .70f, 1f, .032f), 2991);
-            AddShell("Atmosphere - exosphere", EarthR + 820f, new Color(.32f, .52f, .95f, .026f), 2992);
+            // Atmosphere disabled: the planet must read as the real Earth from every
+            // altitude, not through stacked haze shells that wash it milky white.
         }
 
         private void AddShell(string name, float radius, Color tint, int queue)
@@ -901,8 +896,6 @@ namespace SpaceMissionDesign.UI
             if (s == null) s = Shader.Find("Standard");
             var mat = new Material(s) { name = name };
             SetTransparent(mat, tint, queue);
-            hazeMats.Add(mat);
-            hazeAlpha.Add(tint.a);
             Planet(name, EarthCenter, radius, mat);
         }
 
@@ -1358,6 +1351,7 @@ namespace SpaceMissionDesign.UI
             warpInSpace = false;
             thrustMul = 1f;
             engineCut = false;
+            rocketPitch = 0f; rocketYaw = 0f; rocketManual = false;
             if (flame != null) flame.gameObject.SetActive(false);
             if (exhaust != null)
             {
@@ -1528,18 +1522,6 @@ namespace SpaceMissionDesign.UI
                 Color gc = groundMat.color;
                 gc.a = 1f - Mathf.Clamp01((alt - 90f) / 170f);
                 groundMat.color = gc;
-            }
-
-            // Haze shells thin out with altitude and are gone by the time the vehicle is
-            // in deep space, so the planet never looks milky from orbit.
-            float hazeFade = 1f - Mathf.Clamp01((alt - 220f) / 650f);
-            for (int i = 0; i < hazeMats.Count; i++)
-            {
-                Material hm = hazeMats[i];
-                if (hm == null || !hm.HasProperty("_Color")) continue;
-                Color hc = hm.color;
-                hc.a = hazeAlpha[i] * hazeFade;
-                hm.color = hc;
             }
 
             UpdateEngineVisuals();
@@ -1851,9 +1833,23 @@ namespace SpaceMissionDesign.UI
 
             rocketRoot.position = pos;
 
-            // Nose follows the flight direction (the pad phases set their own orientation).
-            if (phase != FlightPhase.MoonStay && phase != FlightPhase.EarthArrival &&
-                phase != FlightPhase.Countdown && phase != FlightPhase.Ignition)
+            // Nose orientation: WASD pitches/yaws the vehicle directly (not the camera).
+            // When no WASD is held the nose auto-faces the flight direction.
+            bool wantManual = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.A) ||
+                              Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.D);
+            if (wantManual) rocketManual = true;
+            if (rocketManual)
+            {
+                float rate = 90f * dt * thrustMul;
+                if (Input.GetKey(KeyCode.W)) rocketPitch += rate;
+                if (Input.GetKey(KeyCode.S)) rocketPitch -= rate;
+                if (Input.GetKey(KeyCode.A)) rocketYaw -= rate;
+                if (Input.GetKey(KeyCode.D)) rocketYaw += rate;
+                rocketPitch = Mathf.Clamp(rocketPitch, -85f, 85f);
+                Quaternion want = Quaternion.Euler(rocketPitch, rocketYaw, 0f);
+                rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-6f * dt));
+            }
+            else
             {
                 Quaternion want = Quaternion.FromToRotation(Vector3.up, flightDir);
                 rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-2.2f * dt));
@@ -2100,11 +2096,8 @@ namespace SpaceMissionDesign.UI
             if (Input.GetKey(KeyCode.UpArrow)) pitch += keyOrbitSpeed * dt;
             if (Input.GetKey(KeyCode.DownArrow)) pitch -= keyOrbitSpeed * dt;
 
-            // --- WASD does the same job for players who prefer the home row ---
-            if (Input.GetKey(KeyCode.W)) pitch += keyOrbitSpeed * dt;
-            if (Input.GetKey(KeyCode.S)) pitch -= keyOrbitSpeed * dt;
-            if (Input.GetKey(KeyCode.A)) yaw -= keyOrbitSpeed * dt;
-            if (Input.GetKey(KeyCode.D)) yaw += keyOrbitSpeed * dt;
+            // --- C changes the camera angle (orbits around the vehicle) ---
+            if (Input.GetKeyDown(KeyCode.C)) yaw += 45f;
 
             // --- pan: MIDDLE mouse button drag ---
             panning = Input.GetMouseButton(2);
