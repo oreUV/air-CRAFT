@@ -5,7 +5,7 @@ using UnityEngine;
 /// Imports the planet and ground maps with settings the runtime relies on:
 /// - EarthClouds is read on the CPU (white-on-black cloud map turned into an alpha
 ///   coverage mask), so it must be readable and uncompressed.
-/// - The Earth/Moon maps are 2048x1024 equirectangular images wrapped around a
+/// - The Earth/Moon maps are 4096x2048 equirectangular images wrapped around a
 ///   sphere, so they need mipmaps (to stop shimmering from orbit) and anisotropy.
 /// - PadGround is 1536x1536 satellite imagery laid flat under the launch pad.
 /// </summary>
@@ -24,7 +24,7 @@ public sealed class TextureImportSettings : AssetPostprocessor
             importer.filterMode = FilterMode.Trilinear;
             importer.anisoLevel = 4;
             importer.wrapMode = TextureWrapMode.Repeat;     // wrap around the globe
-            importer.maxTextureSize = 2048;
+            importer.maxTextureSize = 4096;
             importer.textureType = TextureImporterType.Default;
             importer.alphaSource = TextureImporterAlphaSource.None;
             importer.SaveAndReimport();
