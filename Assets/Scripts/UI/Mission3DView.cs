@@ -12,9 +12,16 @@ namespace SpaceMissionDesign.UI
         /// <summary>Fired once when the full Earth->Moon->Earth flight completes (or is skipped).</summary>
         public static Action MissionComplete;
 
+        /// <summary>Fired when S-IC separates - the Act 3 cue.</summary>
+        public static Action Stage1Separated;
+
+        /// <summary>Fired when the lunar module touches down - the Act 4 cue.</summary>
+        public static Action MoonArrived;
+
         public enum FlightPhase { PreLaunch, Countdown, Ignition, Ascent, Stage1Sep, Stage2Sep, TransitToMoon, FinalStageCommence, LMDeployment, LunarOrbit, MoonLanding, MoonStay, MoonLaunch, Docking, ReturnToEarth, EarthArrival, Complete }
 
         private Transform rocketRoot;
+        private Transform vehicleVisual;   // the model-space parent of the whole stack
         private Transform focus;
         private OrbitCamera cameraRig;
         private Camera rigCamera;
@@ -33,34 +40,38 @@ namespace SpaceMissionDesign.UI
         private float lmLandingTime;      // time LM touched down (for the 10s stay)
         private Vector3 stage3Vel, lmVel; // independent velocity for released pieces
 
-        // ---------------- manual model placement overrides ----------------
-        // Set these in the Unity Inspector to fine-tune each model's position,
-        // rotation and scale. Leave at defaults (zero vector / identity / one)
-        // to use the automatic placement below.
-        [Header("Stage model placement (Inspector overrides)")]
-        public Vector3 stage1BottomPos = new Vector3(0f, 3f, 0f);
+        // ---------------- manual model nudges ----------------
+        // The stack is assembled automatically: every model is measured as it imports and
+        // the pieces are stacked bottom-up, so they cannot drift apart. These fields are
+        // optional corrections applied ON TOP of that automatic placement (model units).
+        // Leave them at zero / identity / one unless one piece needs a manual fix.
+        [Header("Stage model nudges (added to the automatic stack)")]
+        public Vector3 stage1BottomPos = Vector3.zero;
         public Quaternion stage1BottomRot = Quaternion.identity;
         public Vector3 stage1BottomScale = Vector3.one;
-        public Vector3 stage1TopPos = new Vector3(0f, 9f, 0f);
+        public Vector3 stage1TopPos = Vector3.zero;
         public Quaternion stage1TopRot = Quaternion.identity;
         public Vector3 stage1TopScale = Vector3.one;
-        public Vector3 stage2Pos = new Vector3(0f, 14.5f, 0f);
+        public Vector3 stage2Pos = new Vector3(0f, 0f, 0f);   // sunk by the interstage overlap below
         public Quaternion stage2Rot = Quaternion.identity;
         public Vector3 stage2Scale = Vector3.one;
-        public Vector3 stage3Pos = new Vector3(0f, 19f, 0f);
+        public Vector3 stage3Pos = Vector3.zero;
         public Quaternion stage3Rot = Quaternion.identity;
         public Vector3 stage3Scale = Vector3.one;
-        public Vector3 lmPos = new Vector3(0f, 20.5f, 0f);
+        public Vector3 lmPos = Vector3.zero;
         public Quaternion lmRot = Quaternion.identity;
-        public Vector3 lmScale = Vector3.one;
-        public Vector3 servicePos = new Vector3(0f, 22.5f, 0f);
+        public Vector3 lmScale = new Vector3(3.5f, 3.5f, 3.5f);   // visible from orbit framing
+        public Vector3 servicePos = Vector3.zero;
+        // This cone still needs the global flip turned back on, so it sits heat-shield
+        // down with the point facing up into the tower.
         public Quaternion serviceRot = Quaternion.identity;
         public Vector3 serviceScale = Vector3.one;
-        public Vector3 commandPos = new Vector3(0f, 25.25f, 0f);
-        public Quaternion commandRot = Quaternion.identity;
+        public Vector3 commandPos = Vector3.zero;
+        public Quaternion commandRot = Quaternion.Euler(180f, 0f, 0f);
         public Vector3 commandScale = Vector3.one;
-        public Vector3 towerPos = new Vector3(0f, 27.25f, 0f);
-        public Quaternion towerRot = Quaternion.identity;
+        public Vector3 towerPos = Vector3.zero;
+        // The escape tower already imports the right way up, so this cancels the global flip.
+        public Quaternion towerRot = Quaternion.Euler(180f, 0f, 0f);
         public Vector3 towerScale = Vector3.one;
 
         // ---------------- world layout (all fixed; the rocket travels through it) ----------------
@@ -284,8 +295,12 @@ namespace SpaceMissionDesign.UI
             // They share one UV frame - north at v = 1, Greenwich at u = 0 - which is
             // exactly what GlobeMesh generates, so Cape Canaveral lands under the pad
             // and each cloud sits over the continent it actually covers.
-            earthTex = Resources.Load<Texture2D>("Textures/EarthSurface");
-            var cloudMap = Resources.Load<Texture2D>("Textures/EarthClouds");
+            // High-resolution maps from the new Earth asset; the 2K Solar System Scope
+            // maps stay as the fallback if those files are missing.
+            earthTex = Resources.Load<Texture2D>("Textures/EarthSurfaceHQ");
+            if (earthTex == null) earthTex = Resources.Load<Texture2D>("Textures/EarthSurface");
+            var cloudMap = Resources.Load<Texture2D>("Textures/EarthCloudsHQ");
+            if (cloudMap == null) cloudMap = Resources.Load<Texture2D>("Textures/EarthClouds");
             var moonTex = Resources.Load<Texture2D>("Textures/MoonSurface");
 
             // The cloud map is white-on-black, so its luminance is converted into an
@@ -1157,6 +1172,9 @@ namespace SpaceMissionDesign.UI
             cam.depth = 100f;
             cam.enabled = true;
             cam.cullingMask = ~0;
+            // The camera still draws the whole screen (so the whole screen is cleared),
+            // but OrbitCamera lens-shifts the image right so the vehicle lands in the
+            // middle of the visible 3D half instead of behind the UI panel.
             cam.rect = new Rect(0f, 0f, 1f, 1f);
             cam.targetTexture = null;
             EnforceSingleCamera();
@@ -1169,11 +1187,12 @@ namespace SpaceMissionDesign.UI
             var orbit = cam.GetComponent<OrbitCamera>();
             if (orbit == null) orbit = cam.gameObject.AddComponent<OrbitCamera>();
             orbit.target = focus;
-            orbit.minDistance = 9f;
-            orbit.maxDistance = 900f;
-            orbit.homeDistance = 34f;
-            orbit.distance = 34f;
-            orbit.targetDistance = 34f;
+            orbit.minDistance = 3f;
+            orbit.maxDistance = 6000f;
+            float home = RocketHeight * 2.6f;   // frame the stack, not the tower
+            orbit.homeDistance = home;
+            orbit.distance = home;
+            orbit.targetDistance = home;
             orbit.pitch = 8f;
             orbit.yaw = 25f;
             orbit.maxPanDistance = 36f;
@@ -1359,21 +1378,15 @@ namespace SpaceMissionDesign.UI
 
             // visual child holds all artwork scaled to RocketHeight.
             var visual = new GameObject("Vehicle").transform;
+            vehicleVisual = visual;
             visual.SetParent(root, false);
             visual.localPosition = Vector3.zero;
             visual.localRotation = Quaternion.identity;
             visual.localScale = Vector3.one * VehicleScale;
 
-            // Load each stage as its own root so they can separate independently later.
-            // All are positioned in a vertical stack under "visual".
-            stage1BottomRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+bottom", visual, stage1BottomPos, stage1BottomRot, stage1BottomScale, 6f, "Stage 1 bottom (S-IC)");
-            stage1TopRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+top", visual, stage1TopPos, stage1TopRot, stage1TopScale, 6f, "Stage 1 top");
-            stage2Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-II", visual, stage2Pos, stage2Rot, stage2Scale, 5f, "Stage 2 (S-II)");
-            stage3Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IV+b", visual, stage3Pos, stage3Rot, stage3Scale, 4f, "Stage 3 (S-IVb final)");
-            lmRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module", visual, lmPos, lmRot, lmScale, 2.5f, "Lunar module");
-            serviceRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_service+module", visual, servicePos, serviceRot, serviceScale, 3f, "Service module");
-            commandRoot = PlaceStageFbx("Models/SaturnStages/command moduel", visual, commandPos, commandRot, commandScale, 2.5f, "Command module");
-            PlaceStageFbx("Models/SaturnStages/escape tower", visual, towerPos, towerRot, towerScale, 1.5f, "Escape tower");
+            // Each stage stays its own root so it can separate later, but the stack is
+            // assembled from measured geometry instead of hand-typed Y offsets.
+            BuildSaturnVStack(visual);
 
             if (stage1BottomRoot == null && stage2Root == null && stage3Root == null)
             {
@@ -1429,45 +1442,192 @@ namespace SpaceMissionDesign.UI
         }
 
         /// <summary>
-        /// Loads an FBX from Resources, scales it to targetHeight, and places it at localPos
-        /// under the given parent. Returns the instance's transform (still parented).
-        /// If pos/rot/scale overrides are non-default, they are used instead of auto-placement.
+        /// One imported piece of the Saturn V, measured at its natural size before any
+        /// placement is chosen.
         /// </summary>
-        private Transform PlaceStageFbx(string resourcePath, Transform parent, Vector3 localPos, Quaternion localRot, Vector3 localScale, float targetHeight, string name)
+        private sealed class StageFit
         {
-            var prefab = Resources.Load<GameObject>(resourcePath);
-            if (prefab == null) return null;
-            var go = Instantiate(prefab, parent);
-            go.name = name;
-            go.transform.localPosition = localPos;
-            go.transform.localRotation = localRot;
-            go.transform.localScale = localScale;
+            public int Slot;
+            public string Name;
+            public Transform Root;
+            public Bounds Natural;      // geometry offset around the piece origin, Vehicle space
+            public Vector3 Offset;      // Inspector nudge
+            public Vector3 ScaleMul;    // Inspector multiplier on the shared scale
+        }
 
-            foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
-            foreach (var anim in go.GetComponentsInChildren<Animator>()) Destroy(anim);
-
-            // Only auto-scale/center if the caller left scale at default (1,1,1).
-            // If they set a custom scale in the Inspector, respect it as-is.
-            if (localScale == Vector3.one)
+        /// <summary>
+        /// Assembles the Saturn V from the separate model files.
+        ///
+        /// The old code scaled every piece to its own target height at hand-typed Y
+        /// offsets. That had two bugs: the bounds were measured in the parent's space
+        /// *after* the piece had already been moved, so the offset was subtracted twice
+        /// and each piece drifted to its own height; and height-only scaling turned short,
+        /// wide pieces (engine bells, interstages) into huge slabs. The result was the
+        /// exploded stack of floating parts.
+        ///
+        /// Here every piece is measured at the origin in its own natural units, one shared
+        /// scale factor is derived from the whole vehicle, and the pieces are stacked
+        /// bottom-up using their measured heights - so the joints cannot open up and the
+        /// proportions stay those of the real rocket, whatever units the FBX files use.
+        /// </summary>
+        private void BuildSaturnVStack(Transform visual)
+        {
+            var specs = new[]
             {
-                if (TryLocalBounds(go, parent, out var bounds))
+                (id: 0, path: "Models/SaturnStages/ImageToStl.com_S-IC+bottom", label: "Stage 1 bottom (S-IC)", offset: stage1BottomPos, rot: stage1BottomRot, mul: stage1BottomScale, mat: white),
+                (id: 1, path: "Models/SaturnStages/ImageToStl.com_S-IC+top", label: "Stage 1 top", offset: stage1TopPos, rot: stage1TopRot, mul: stage1TopScale, mat: white),
+                (id: 2, path: "Models/SaturnStages/ImageToStl.com_S-II", label: "Stage 2 (S-II)", offset: stage2Pos, rot: stage2Rot, mul: stage2Scale, mat: white),
+                (id: 3, path: "Models/SaturnStages/ImageToStl.com_S-IV+b", label: "Stage 3 (S-IVb final)", offset: stage3Pos, rot: stage3Rot, mul: stage3Scale, mat: white),
+                (id: 4, path: "Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module", label: "Lunar module", offset: lmPos, rot: lmRot, mul: lmScale, mat: gold),
+                // The two files are the other way round from their names: the piece named
+                // "service module" is the cone (command module) and "command moduel" is the
+                // plain cylinder (service module). A cone also has to sit ABOVE the cylinder,
+                // so their stack order is swapped to match.
+                (id: 6, path: "Models/SaturnStages/command moduel", label: "Service module (cylinder)", offset: commandPos, rot: commandRot, mul: commandScale, mat: metal),
+                (id: 5, path: "Models/SaturnStages/ImageToStl.com_service+module", label: "Command module (cone)", offset: servicePos, rot: serviceRot, mul: serviceScale, mat: white),
+                (id: 7, path: "Models/SaturnStages/escape tower", label: "Escape tower", offset: towerPos, rot: towerRot, mul: towerScale, mat: dark)
+            };
+
+            var fits = new List<StageFit>(specs.Length);
+            float naturalHeight = 0f;
+
+            // Pass 1: import, stand upright, measure. Everything is measured at the origin
+            // in "Vehicle" space, so no placement offset can contaminate the bounds.
+            foreach (var spec in specs)
+            {
+                var prefab = Resources.Load<GameObject>(spec.path);
+                if (prefab == null)
                 {
-                    var upright = AxisToUpRotation(bounds.size);
-                    if (upright != Quaternion.identity)
-                    {
-                        go.transform.localRotation = upright;
-                        if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
-                    }
-                    float h = Mathf.Max(bounds.size.y, .0001f);
-                    var scale = Vector3.one * (targetHeight / h);
-                    go.transform.localScale = scale;
-                    Vector3 min = Vector3.Scale(bounds.min, scale);
-                    Vector3 max = Vector3.Scale(bounds.max, scale);
-                    Vector3 centre = (min + max) * .5f;
-                    go.transform.localPosition = localPos - new Vector3(centre.x, min.y, centre.z);
+                    Debug.LogWarning($"Mission3DView: model '{spec.path}' not found - skipped.");
+                    continue;
+                }
+
+                var go = Instantiate(prefab, visual);
+                go.name = spec.label;
+                go.transform.localPosition = Vector3.zero;
+                go.transform.localRotation = Quaternion.identity;
+                go.transform.localScale = Vector3.one;
+
+                foreach (var col in go.GetComponentsInChildren<Collider>(true)) Destroy(col);
+                foreach (var anim in go.GetComponentsInChildren<Animator>(true)) Destroy(anim);
+                DressHull(go, spec.mat);
+
+                if (!TryLocalBounds(go, visual, out var natural))
+                {
+                    Debug.LogWarning($"Mission3DView: '{spec.label}' has no readable mesh - skipped.");
+                    Destroy(go);
+                    continue;
+                }
+
+                // These STL conversions are authored nose-down: measured on their own,
+                // every piece is upside down (engine bells pointing up, cones opening
+                // downward). One 180-degree turn about the vehicle's X axis stands each
+                // piece the right way up, and it is applied to all of them so the stack
+                // stays consistent.
+                var upright = AxisToUpRotation(natural.size);
+                go.transform.localRotation = spec.rot * Quaternion.Euler(180f, 0f, 0f) * upright;
+
+                // Re-measure in the final orientation - these bounds drive the stacking.
+                if (!TryLocalBounds(go, visual, out natural))
+                {
+                    Destroy(go);
+                    continue;
+                }
+
+                fits.Add(new StageFit
+                {
+                    Slot = spec.id,
+                    Name = spec.label,
+                    Root = go.transform,
+                    Natural = natural,
+                    Offset = spec.offset,
+                    ScaleMul = spec.mul
+                });
+                naturalHeight += Mathf.Max(natural.size.y, .0001f);
+            }
+
+            if (fits.Count == 0) return;
+
+            // Pass 2: one shared scale for the whole vehicle. Scaling each piece to its own
+            // height is what destroyed the proportions and diameters.
+            float uniform = RocketModelHeight / Mathf.Max(naturalHeight, .0001f);
+
+            // Pass 3: stack bottom-up from the measured heights, centred on the vehicle axis.
+            const float jointOverlap = .12f;    // model units, hides the seams between pieces
+            // The S-II and S-IVb engine bells are modelled hanging below their tanks. Sunk
+            // this far into the stage underneath, they sit inside the interstage instead of
+            // poking out where the camera can see them during the launch.
+            const float engineSink = 2.1f;
+            string report = string.Empty;
+            float y = 0f;
+            float stage3Top = -1f, moduleBase = -1f, stage3Width = 0f;
+
+            foreach (var fit in fits)
+            {
+                var go = fit.Root;
+                var scale = Vector3.one * uniform;
+                scale = new Vector3(scale.x * fit.ScaleMul.x, scale.y * fit.ScaleMul.y, scale.z * fit.ScaleMul.z);
+                go.localScale = scale;
+
+                Vector3 min = Vector3.Scale(fit.Natural.min, scale);
+                Vector3 max = Vector3.Scale(fit.Natural.max, scale);
+                Vector3 centre = (min + max) * .5f;
+
+                if (fit.Slot == 4) moduleBase = y;   // underside of the lunar module
+
+                go.localPosition = new Vector3(-centre.x, y - min.y, -centre.z) + fit.Offset;
+                float pieceHeight = Mathf.Max(max.y - min.y, .0001f);
+                float overlap = fit.Slot == 1 || fit.Slot == 2 ? engineSink : jointOverlap;
+                y += pieceHeight - overlap;
+
+                if (fit.Slot == 3)
+                {
+                    stage3Top = y;
+                    stage3Width = Mathf.Max(fit.Natural.size.x, fit.Natural.size.z) * uniform;
+                }
+
+
+                report += $"\n  {fit.Name}: natural {fit.Natural.size.x:0.##} x {fit.Natural.size.y:0.##} x {fit.Natural.size.z:0.##}, placed at y {go.localPosition.y:0.##}";
+
+                switch (fit.Slot)
+                {
+                    case 0: stage1BottomRoot = go; break;
+                    case 1: stage1TopRoot = go; break;
+                    case 2: stage2Root = go; break;
+                    case 3: stage3Root = go; break;
+                    case 4: lmRoot = go; break;
+                    case 5: serviceRoot = go; break;
+                    case 6: commandRoot = go; break;
                 }
             }
-            return go.transform;
+
+            // The lunar module and the narrow neck under it sat fully exposed between the
+            // S-IVb and the command module. The real vehicle carries the SLA shroud over
+            // that whole section, so the same volume is wrapped in a plain adapter here.
+            if (stage3Top > 0f && moduleBase > stage3Top + .01f && vehicleVisual != null)
+            {
+                float h = moduleBase - stage3Top;
+                float r = stage3Width * .5f * 1.02f;   // stays the width of the stage, not the LM
+                Cylinder("SLA shroud", new Vector3(0f, stage3Top + h * .5f, 0f), Mathf.Max(r, .05f), h, white, vehicleVisual);
+                Debug.Log($"Mission3DView: SLA shroud added over the LM, {h:0.##} model units tall, radius {r:0.##}.");
+            }
+
+            Debug.Log($"Mission3DView: Saturn V assembled from {fits.Count} models, natural height {naturalHeight:0.##} -> shared scale {uniform:F4}, stack {y:0.##} model units ({y * VehicleScale:0.##} world).{report}");
+        }
+
+        /// <summary>
+        /// Gives an imported piece one of the hull materials when the FBX carries no texture
+        /// of its own (STL conversions import as flat untextured white), so the vehicle
+        /// shades like painted metal. Textured materials are left untouched.
+        /// </summary>
+        private static void DressHull(GameObject go, Material fallback)
+        {
+            if (fallback == null) return;
+            foreach (var r in go.GetComponentsInChildren<Renderer>(true))
+            {
+                var m = r.sharedMaterial;
+                if (m == null || m.mainTexture == null) r.sharedMaterial = fallback;
+            }
         }
 
 
@@ -1837,6 +1997,7 @@ namespace SpaceMissionDesign.UI
                         ReleaseStage(stage1TopRoot, flightDir, 4f, "Stage 1 top");
                         phase = FlightPhase.Stage1Sep;
                         phaseElapsed = 0f;
+                        Stage1Separated?.Invoke();
                     }
                     // Stage 2 (S-II) separates around 109-115 miles (~1600 units / ~178 km).
                     else if (alt > 1600f && !stage2Released)
@@ -1946,6 +2107,7 @@ namespace SpaceMissionDesign.UI
                             lmLanded = true;
                             lmLandingTime = Time.unscaledTime;
                             SetBurn(false);
+                            MoonArrived?.Invoke();
                         }
                     }
 
@@ -2206,6 +2368,8 @@ namespace SpaceMissionDesign.UI
                 if (burning) em.rateOverTime = 320f * fire;
             }
 
+            if (burning) AttachFlameToActiveEngine();
+
             if (flame != null && burning)
             {
                 float flicker = 1f + Mathf.Sin(Time.time * 38f) * .12f;
@@ -2223,6 +2387,40 @@ namespace SpaceMissionDesign.UI
                 var pem = padSmoke.emission;
                 if (pem.enabled != billowing) pem.enabled = billowing;
             }
+        }
+
+        /// <summary>
+        /// Keeps the flame and the exhaust plume under whichever engine is actually firing:
+        /// S-IC, then S-II, then S-IVb, the LM during the lunar hop and the service module
+        /// on the way home. Without this the flame stayed welded to the base of the stack
+        /// and hung in space after the lower stages were gone.
+        /// </summary>
+        private void AttachFlameToActiveEngine()
+        {
+            if (flame == null || vehicleVisual == null) return;
+
+            Transform burn = null;
+            if (phase == FlightPhase.LMDeployment || phase == FlightPhase.MoonLanding || phase == FlightPhase.MoonLaunch)
+                burn = lmRoot;
+            else if (phase == FlightPhase.ReturnToEarth || phase == FlightPhase.EarthArrival)
+                burn = serviceRoot;
+            else if (!stage1Released)
+                burn = stage1BottomRoot;
+            else if (!stage2Released)
+                burn = stage2Root;
+            else
+                burn = stage3Root;
+
+            // A stage that has already separated is no longer part of the vehicle, so its
+            // bounds mean nothing in vehicle space; leave the flame where it is then.
+            if (burn == null || burn.parent != vehicleVisual) return;
+            if (!TryLocalBounds(burn.gameObject, vehicleVisual, out var engine)) return;
+
+            var engineFace = new Vector3(engine.center.x, engine.min.y, engine.center.z);
+            flame.localPosition = engineFace - new Vector3(0f, 3f, 0f);   // flame hangs below it
+            flame.localRotation = Quaternion.identity;
+
+            if (exhaust != null) exhaust.transform.localPosition = engineFace;
         }
 
         /// <summary>Switches the ground smoke cloud at the flame trench on or off.</summary>
@@ -2298,7 +2496,7 @@ namespace SpaceMissionDesign.UI
         public float maxDistance = 200f;
 
         [Header("Feel")]
-        public float zoomStep = .12f;
+        public float zoomStep = .20f;
         public float orbitSensitivity = .22f;   // degrees per pixel while dragging
         public float keyOrbitSpeed = 90f;       // deg/s with arrow keys
         public float maxPanDistance = 70f;
@@ -2325,6 +2523,12 @@ namespace SpaceMissionDesign.UI
 
         // Engine vibration, in world units. Set by the mission each frame, decays here.
         public float shake;
+
+        // Horizontal lens shift in NDC (.5 moves the rendered image a quarter of the
+        // screen width to the right). The UI panel owns the left half of the screen, so
+        // without this the vehicle sits in the middle of the screen, behind the panel,
+        // and only its right edge shows at the panel's border.
+        public float lensShift = .5f;
 
         private void LateUpdate()
         {
@@ -2357,7 +2561,7 @@ namespace SpaceMissionDesign.UI
             float scroll = Input.mouseScrollDelta.y;
             if (Mathf.Abs(scroll) > .01f)
             {
-                float factor = Mathf.Clamp(1f - scroll * zoomStep, .55f, 1.8f);
+                float factor = Mathf.Clamp(1f - scroll * zoomStep, .40f, 2.2f);
                 targetDistance = Mathf.Clamp(targetDistance * factor, minDistance, maxDistance);
             }
 
@@ -2416,6 +2620,8 @@ namespace SpaceMissionDesign.UI
             transform.position = pivot + rot * new Vector3(0f, 0f, -distance);
             transform.LookAt(pivot);
 
+            ApplyLensShift();
+
             // Engine/launch vibration.
             if (shake > .0005f)
             {
@@ -2426,6 +2632,21 @@ namespace SpaceMissionDesign.UI
                 shake *= .88f;
             }
             else shake = 0f;
+        }
+
+        /// <summary>
+        /// Builds the projection matrix by hand so the view can be shifted sideways without
+        /// changing the camera's rect. Drawing into a sub-rect would leave the rest of the
+        /// backbuffer uncleared and flicker behind the UI panel.
+        /// </summary>
+        private void ApplyLensShift()
+        {
+            var cam = GetComponent<Camera>();
+            if (cam == null) return;
+
+            var p = Matrix4x4.Perspective(cam.fieldOfView, cam.aspect, cam.nearClipPlane, cam.farClipPlane);
+            p.m02 = -lensShift;   // -P02 is the NDC x of the view centre
+            cam.projectionMatrix = p;
         }
 
         /// <summary>True when the player is actively asking for camera control.</summary>

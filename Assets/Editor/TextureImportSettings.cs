@@ -31,6 +31,26 @@ public sealed class TextureImportSettings : AssetPostprocessor
             return;
         }
 
+        // High-resolution Earth asset: a 16K land/ocean colour map and an 8K cloud map.
+        // The clouds are converted to an alpha coverage mask on the CPU at runtime, so
+        // they must stay readable and uncompressed.
+        if (file == "EarthSurfaceHQ.png" || file == "EarthCloudsHQ.tif")
+        {
+            var importer = (TextureImporter)assetImporter;
+            bool clouds = file == "EarthCloudsHQ.tif";
+            importer.isReadable = clouds;
+            importer.textureCompression = clouds ? TextureImporterCompression.Uncompressed : TextureImporterCompression.CompressedHQ;
+            importer.mipmapEnabled = true;
+            importer.filterMode = FilterMode.Trilinear;
+            importer.anisoLevel = 4;
+            importer.wrapMode = TextureWrapMode.Repeat;     // wrap around the globe
+            importer.maxTextureSize = clouds ? 4096 : 8192;
+            importer.textureType = TextureImporterType.Default;
+            importer.alphaSource = TextureImporterAlphaSource.None;
+            importer.SaveAndReimport();
+            return;
+        }
+
         if (file == "PadGround.jpg")
         {
             var importer = (TextureImporter)assetImporter;

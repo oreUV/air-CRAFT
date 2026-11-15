@@ -48,6 +48,7 @@ namespace SpaceMissionDesign.UI
             EnsureManagers();
             EnsureEventSystem();
             new GameObject("3D Mission View").AddComponent<Mission3DView>().Initialize();
+            if (CinematicPlayer.Instance == null) new GameObject("Cinematic Player").AddComponent<CinematicPlayer>();
             BuildCanvas();
             ShowTitle();
         }
@@ -344,7 +345,7 @@ namespace SpaceMissionDesign.UI
                 int n = 1;
                 if (input != null && int.TryParse(input.text, out int parsed)) n = Mathf.Clamp(parsed, 1, 4);
                 if (manager != null) manager.SetPlayerCount(n);
-                ShowMissionSelect();
+                PlayAct1();
             });
 
             NewText(canvas.transform, "Budget • Mass • Power • Data • Lifetime", 15, new Vector2(-500, -160), new Vector2(880, 30), TextAnchor.MiddleCenter, new Color(.45f, .58f, .75f));
@@ -634,7 +635,6 @@ namespace SpaceMissionDesign.UI
             // Reset the 3D stack and fly it: Earth departure, Moon, and return,
             // continuous until the rocket lands back on the pad.
             Mission3DView.Instance?.Refresh(manager.SpacecraftDesign);
-            Mission3DView.Instance?.PlayLaunch();
             NewText(canvas.transform, "LIFTOFF — flight in progress…", 24,
                 new Vector2(-500, -170), new Vector2(880, 44), TextAnchor.MiddleCenter, new Color(1f, .82f, .45f), true);
 
@@ -646,8 +646,40 @@ namespace SpaceMissionDesign.UI
             NewButton(canvas.transform, "SKIP FLIGHT", new Vector2(400, -330), new Vector2(240, 48),
                 () => Mission3DView.Instance?.SkipToResults(), new Color(.25f, .28f, .34f), 16);
 
-            // Results appear when the round trip completes.
+            // Act II runs before the vehicle leaves the pad; liftoff starts when the clip
+            // ends or is skipped. Acts III-V are driven by the flight itself.
+            Mission3DView.Stage1Separated = PlayAct3;
+            Mission3DView.MoonArrived = PlayAct4;
             Mission3DView.MissionComplete = ShowResults;
+            PlayAct2();
+        }
+
+        // ---------------- act videos ----------------
+
+        private void PlayAct1()
+        {
+            if (CinematicPlayer.Instance != null) CinematicPlayer.Instance.Play("Act1", ShowMissionSelect);
+            else ShowMissionSelect();
+        }
+
+        private void PlayAct2()
+        {
+            if (CinematicPlayer.Instance != null) CinematicPlayer.Instance.Play("Act2", () => Mission3DView.Instance?.PlayLaunch());
+            else Mission3DView.Instance?.PlayLaunch();
+        }
+
+        private void PlayAct3()
+        {
+            CinematicPlayer.Instance?.Play("Act3");
+        }
+
+        /// <summary>Act IV is the lunar arrival; the ending (Act V) plays straight after it.</summary>
+        private void PlayAct4()
+        {
+            if (CinematicPlayer.Instance != null)
+                CinematicPlayer.Instance.Play("Act4", () => CinematicPlayer.Instance.Play("Act5"));
+            else
+                CinematicPlayer.Instance?.Play("Act5");
         }
 
         private void Update()
