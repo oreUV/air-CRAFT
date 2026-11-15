@@ -28,10 +28,40 @@ namespace SpaceMissionDesign.UI
         // ---------------- staging: separate roots so each piece can fly on its own ----------------
         // rocketRoot is always the "active" vehicle the camera follows (command module on return).
         // Staged pieces are unparented and given independent trajectories at separation events.
-        private Transform stage1Root, stage1BottomRoot, stage1TopRoot, stage2Root, stage3Root, lmRoot, commandRoot, serviceRoot;
+        private Transform stage1BottomRoot, stage1TopRoot, stage2Root, stage3Root, lmRoot, commandRoot, serviceRoot;
         private bool stage1Released, stage2Released, stage3Released, lmDeployed, lmLanded, lmDocked;
         private float lmLandingTime;      // time LM touched down (for the 10s stay)
         private Vector3 stage3Vel, lmVel; // independent velocity for released pieces
+
+        // ---------------- manual model placement overrides ----------------
+        // Set these in the Unity Inspector to fine-tune each model's position,
+        // rotation and scale. Leave at defaults (zero vector / identity / one)
+        // to use the automatic placement below.
+        [Header("Stage model placement (Inspector overrides)")]
+        public Vector3 stage1BottomPos = new Vector3(0f, 3f, 0f);
+        public Quaternion stage1BottomRot = Quaternion.identity;
+        public Vector3 stage1BottomScale = Vector3.one;
+        public Vector3 stage1TopPos = new Vector3(0f, 9f, 0f);
+        public Quaternion stage1TopRot = Quaternion.identity;
+        public Vector3 stage1TopScale = Vector3.one;
+        public Vector3 stage2Pos = new Vector3(0f, 14.5f, 0f);
+        public Quaternion stage2Rot = Quaternion.identity;
+        public Vector3 stage2Scale = Vector3.one;
+        public Vector3 stage3Pos = new Vector3(0f, 19f, 0f);
+        public Quaternion stage3Rot = Quaternion.identity;
+        public Vector3 stage3Scale = Vector3.one;
+        public Vector3 lmPos = new Vector3(0f, 20.5f, 0f);
+        public Quaternion lmRot = Quaternion.identity;
+        public Vector3 lmScale = Vector3.one;
+        public Vector3 servicePos = new Vector3(0f, 22.5f, 0f);
+        public Quaternion serviceRot = Quaternion.identity;
+        public Vector3 serviceScale = Vector3.one;
+        public Vector3 commandPos = new Vector3(0f, 25.25f, 0f);
+        public Quaternion commandRot = Quaternion.identity;
+        public Vector3 commandScale = Vector3.one;
+        public Vector3 towerPos = new Vector3(0f, 27.25f, 0f);
+        public Quaternion towerRot = Quaternion.identity;
+        public Vector3 towerScale = Vector3.one;
 
         // ---------------- world layout (all fixed; the rocket travels through it) ----------------
         // A 1600-unit planet with the pad on its +Y pole keeps the ground FLAT at ground
@@ -87,15 +117,11 @@ namespace SpaceMissionDesign.UI
         private float flightSpeed;
 
         // ---------------- time warp ----------------
-        // Inside the atmosphere the clock can only be nudged (1x / 2x / 5x) - a launch is
-        // meant to be watched. Above AtmosphereTop the cruise is compressed instead:
-        // 50x / 100x / 1000x / 10000x. Keys 1-7 pick a step (clamped to the ladder that is
-        // valid at the current altitude), T cycles through that ladder.
+        // One warp ladder for the whole flight: 1x / 2x / 5x / 10x / 50x / 100x / 1000x / 10000x.
+        // Keys 1-4 pick low steps, keys 5-8 pick high steps, T cycles through all of them.
         public const float AtmosphereTop = 900f;          // ~100 km, the edge of space
         private static readonly float[] WarpSteps = { 1f, 2f, 5f, 10f, 50f, 100f, 1000f, 10000f };
-        private const int WarpInAtmosphereCount = 4;
         private int warpIndex;
-        private bool warpInSpace;
 
         // Shift = hold to boost the thrust (up to 1.8x), Space = cut the engine (toggles).
         // The vehicle coasts when the engine is cut; Shift spools it back up.
@@ -115,7 +141,7 @@ namespace SpaceMissionDesign.UI
         {
             get
             {
-                string ladder = warpInSpace ? "1-4: 50 100 1000 10000" : "1-3: 1 2 5";
+                string ladder = "1-4: 1 2 5 10   5-8: 50 100 1000 10000";
                 return $"TIME  {Warp:0}x  ({ladder})    THRUST {Mathf.RoundToInt(thrustMul * 100)}%{(engineCut ? "  ENGINE CUT" : "")}";
             }
         }
@@ -1340,16 +1366,16 @@ namespace SpaceMissionDesign.UI
 
             // Load each stage as its own root so they can separate independently later.
             // All are positioned in a vertical stack under "visual".
-            stage1BottomRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+bottom", visual, new Vector3(0, 3f, 0), 6f, "Stage 1 bottom (S-IC)");
-            stage1TopRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+top", visual, new Vector3(0, 9f, 0), 6f, "Stage 1 top");
-            stage2Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-II", visual, new Vector3(0, 14.5f, 0), 5f, "Stage 2 (S-II)");
-            stage3Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IV+b", visual, new Vector3(0, 19f, 0), 4f, "Stage 3 (S-IVb final)");
-            lmRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module", visual, new Vector3(0, 20.5f, 0), 2.5f, "Lunar module");
-            serviceRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_service+module", visual, new Vector3(0, 22.5f, 0), 3f, "Service module");
-            commandRoot = PlaceStageFbx("Models/SaturnStages/command moduel", visual, new Vector3(0, 25.25f, 0), 2.5f, "Command module");
-            PlaceStageFbx("Models/SaturnStages/escape tower", visual, new Vector3(0, 27.25f, 0), 1.5f, "Escape tower");
+            stage1BottomRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+bottom", visual, stage1BottomPos, stage1BottomRot, stage1BottomScale, 6f, "Stage 1 bottom (S-IC)");
+            stage1TopRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+top", visual, stage1TopPos, stage1TopRot, stage1TopScale, 6f, "Stage 1 top");
+            stage2Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-II", visual, stage2Pos, stage2Rot, stage2Scale, 5f, "Stage 2 (S-II)");
+            stage3Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IV+b", visual, stage3Pos, stage3Rot, stage3Scale, 4f, "Stage 3 (S-IVb final)");
+            lmRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module", visual, lmPos, lmRot, lmScale, 2.5f, "Lunar module");
+            serviceRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_service+module", visual, servicePos, serviceRot, serviceScale, 3f, "Service module");
+            commandRoot = PlaceStageFbx("Models/SaturnStages/command moduel", visual, commandPos, commandRot, commandScale, 2.5f, "Command module");
+            PlaceStageFbx("Models/SaturnStages/escape tower", visual, towerPos, towerRot, towerScale, 1.5f, "Escape tower");
 
-            if (stage1Root == null && stage2Root == null && stage3Root == null)
+            if (stage1BottomRoot == null && stage2Root == null && stage3Root == null)
             {
                 // Primitive fallback if FBXs are missing.
                 Cylinder("Stage 1", new Vector3(0, Stage1Base + Stage1H * .5f, 0), Stage1D * .5f, Stage1H, white, visual);
@@ -1379,7 +1405,6 @@ namespace SpaceMissionDesign.UI
             flightDir = Vector3.up;
             flightSpeed = 0f;
             warpIndex = 0;
-            warpInSpace = false;
             thrustMul = 1f;
             engineCut = false;
             rocketPitch = 0f; rocketYaw = 0f; rocketManual = false;
@@ -1406,35 +1431,41 @@ namespace SpaceMissionDesign.UI
         /// <summary>
         /// Loads an FBX from Resources, scales it to targetHeight, and places it at localPos
         /// under the given parent. Returns the instance's transform (still parented).
+        /// If pos/rot/scale overrides are non-default, they are used instead of auto-placement.
         /// </summary>
-        private Transform PlaceStageFbx(string resourcePath, Transform parent, Vector3 localPos, float targetHeight, string name)
+        private Transform PlaceStageFbx(string resourcePath, Transform parent, Vector3 localPos, Quaternion localRot, Vector3 localScale, float targetHeight, string name)
         {
             var prefab = Resources.Load<GameObject>(resourcePath);
             if (prefab == null) return null;
             var go = Instantiate(prefab, parent);
             go.name = name;
             go.transform.localPosition = localPos;
-            go.transform.localRotation = Quaternion.identity;
-            go.transform.localScale = Vector3.one;
+            go.transform.localRotation = localRot;
+            go.transform.localScale = localScale;
 
             foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
             foreach (var anim in go.GetComponentsInChildren<Animator>()) Destroy(anim);
 
-            if (TryLocalBounds(go, parent, out var bounds))
+            // Only auto-scale/center if the caller left scale at default (1,1,1).
+            // If they set a custom scale in the Inspector, respect it as-is.
+            if (localScale == Vector3.one)
             {
-                var upright = AxisToUpRotation(bounds.size);
-                if (upright != Quaternion.identity)
+                if (TryLocalBounds(go, parent, out var bounds))
                 {
-                    go.transform.localRotation = upright;
-                    if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
+                    var upright = AxisToUpRotation(bounds.size);
+                    if (upright != Quaternion.identity)
+                    {
+                        go.transform.localRotation = upright;
+                        if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
+                    }
+                    float h = Mathf.Max(bounds.size.y, .0001f);
+                    var scale = Vector3.one * (targetHeight / h);
+                    go.transform.localScale = scale;
+                    Vector3 min = Vector3.Scale(bounds.min, scale);
+                    Vector3 max = Vector3.Scale(bounds.max, scale);
+                    Vector3 centre = (min + max) * .5f;
+                    go.transform.localPosition = localPos - new Vector3(centre.x, min.y, centre.z);
                 }
-                float h = Mathf.Max(bounds.size.y, .0001f);
-                var scale = Vector3.one * (targetHeight / h);
-                go.transform.localScale = scale;
-                Vector3 min = Vector3.Scale(bounds.min, scale);
-                Vector3 max = Vector3.Scale(bounds.max, scale);
-                Vector3 centre = (min + max) * .5f;
-                go.transform.localPosition = localPos - new Vector3(centre.x, min.y, centre.z);
             }
             return go.transform;
         }
@@ -1701,8 +1732,8 @@ namespace SpaceMissionDesign.UI
         /// crosses the top of the atmosphere, because that is the point where compressing
         /// time stops spoiling the launch and starts being useful.
         /// </summary>
-        // Warp keys, split into the two ladders. Keys 1-4 pick the step that is valid
-        // at the current altitude (1/2/5/10 in air; 50/100/1000/10000 in space). T cycles.
+        // Warp keys, all 8 steps available at any altitude. Keys 1-4 pick the step,
+        // T cycles through the full ladder (1/2/5/10/50/100/1000/10000).
         private static readonly KeyCode[] WarpKeys = {
             KeyCode.Alpha1, KeyCode.Alpha2, KeyCode.Alpha3, KeyCode.Alpha4,
             KeyCode.Alpha5, KeyCode.Alpha6, KeyCode.Alpha7, KeyCode.Alpha8,
@@ -1712,15 +1743,9 @@ namespace SpaceMissionDesign.UI
 
         private void UpdateWarp()
         {
-            bool space = AltitudeUnits >= AtmosphereTop;
-            if (space != warpInSpace)
-            {
-                warpInSpace = space;
-                warpIndex = space ? WarpInAtmosphereCount : 0;
-            }
-
-            int lo = warpInSpace ? WarpInAtmosphereCount : 0;
-            int hi = warpInSpace ? WarpSteps.Length - 1 : WarpInAtmosphereCount - 1;
+            // One ladder for the whole flight - no split at the atmosphere top.
+            int lo = 0;
+            int hi = WarpSteps.Length - 1;
 
             for (int i = 0; i < WarpSteps.Length; i++)
             {
