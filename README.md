@@ -42,6 +42,13 @@ Assets/
 ProjectSettings/        Unity project settings
 ```
 
+## Textures
+
+The 3D mission view renders real imagery rather than invented art:
+
+- **Earth surface, cloud cover and Moon** — [Solar System Scope](https://www.solarsystemscope.com/textures/) 2K equirectangular maps, licensed CC BY 4.0.
+- **Launch-site ground** — Esri World Imagery satellite tiles of Launch Complex 39A, Kennedy Space Center (imagery © Esri, Maxar, Earthstar Geographics).
+
 ## License
 
 MIT License for original code.

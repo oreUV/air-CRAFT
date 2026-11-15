@@ -34,7 +34,7 @@ public sealed class TextureImportSettings : AssetPostprocessor
         if (file == "PadGround.jpg")
         {
             var importer = (TextureImporter)assetImporter;
-            importer.isReadable = false;
+            importer.isReadable = true;                     // alpha vignette is baked at runtime
             importer.textureCompression = TextureImporterCompression.CompressedHQ;
             importer.mipmapEnabled = true;
             importer.filterMode = FilterMode.Trilinear;

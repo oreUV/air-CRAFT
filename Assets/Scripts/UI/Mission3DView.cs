@@ -36,9 +36,10 @@ namespace SpaceMissionDesign.UI
         private static readonly Vector3 MoonCenter = new Vector3(10f, 520f, 6000f);
         private const float MoonR = 420f;
 
-        // Launch Complex 39A, Kennedy Space Center - the pad Apollo 11 left from
-        // (28.5729 N, 80.6490 W). The Earth texture is mapped so this exact point
-        // sits under the vehicle.
+        /* Launch Complex 39A, Kennedy Space Center - the pad Apollo 11 left from
+           (28.6084 N, 80.6043 W). The Earth texture is mapped so this exact point
+           sits under the vehicle, and the ground under the pad is real satellite
+           imagery of the same spot. */
         private const float SiteLatitude = 28.6084f;
         private const float SiteLongitude = -80.6043f;
 
@@ -51,9 +52,10 @@ namespace SpaceMissionDesign.UI
         private const float TableHeight = 3f;                      // model space
         private const float PadTop = TableHeight * VehicleScale;    // world space
 
-        // Local detail ground: a cap of the planet drawn with a sharp coastal texture so
-        // the launch site looks like land at ground level instead of a blurry planet texel.
-        private const float GroundPatchRadius = 420f;   // surface distance from the pad
+        // Local detail ground: real satellite imagery of the pad drawn over the globe,
+        // sized to reach just past the horizon at ground level (107 units), then faded
+        // into the planet map once the vehicle is high enough to see further.
+        private const float GroundPatchRadius = 120f;
         private Transform groundPatch;
 
         private Transform earthSphere;
@@ -497,8 +499,55 @@ namespace SpaceMissionDesign.UI
         private static Texture2D LocalGroundTexture(int size = 1024)
         {
             var sat = Resources.Load<Texture2D>("Textures/PadGround");
-            if (sat != null) return sat;
+            if (sat != null)
+            {
+                var vignetted = GroundVignette(sat);
+                return vignetted != null ? vignetted : sat;
+            }
             return ProceduralGround(size);
+        }
+
+        /// <summary>
+        /// The satellite crop is square. A radial alpha ramp on the outer edge lets it
+        /// dissolve into the globe underneath instead of ending in a visible square of
+        /// imagery as the vehicle climbs.
+        /// </summary>
+        private static Texture2D GroundVignette(Texture2D src)
+        {
+            Color32[] px;
+            try { px = src.GetPixels32(); }
+            catch { return null; }
+            if (px == null || px.Length == 0) return null;
+
+            int w = src.width, h = src.height;
+            var tex = new Texture2D(w, h, TextureFormat.RGBA32, true)
+            {
+                wrapMode = TextureWrapMode.Clamp,
+                name = "Launch site ground"
+            };
+            var dst = new Color32[px.Length];
+
+            for (int y = 0; y < h; y++)
+            {
+                float ny = ((y + .5f) / h) * 2f - 1f;
+                for (int x = 0; x < w; x++)
+                {
+                    float nx = ((x + .5f) / w) * 2f - 1f;
+                    float r = Mathf.Sqrt(nx * nx + ny * ny);
+                    // Keep the pad area fully sharp and dissolve only the last quarter,
+                    // which sits at and beyond the horizon anyway.
+                    float a = 1f - Mathf.Clamp01((r - .70f) / .30f);
+                    a = a * a * (3f - 2f * a);
+
+                    Color32 c = px[y * w + x];
+                    c.a = (byte)(Mathf.Clamp01(a) * 255f);
+                    dst[y * w + x] = c;
+                }
+            }
+
+            tex.SetPixels32(dst);
+            tex.Apply();
+            return tex;
         }
 
         /// <summary>
@@ -1420,7 +1469,7 @@ namespace SpaceMissionDesign.UI
             if (groundMat != null && groundMat.HasProperty("_Color"))
             {
                 Color gc = groundMat.color;
-                gc.a = 1f - Mathf.Clamp01((alt - 250f) / 450f);
+                gc.a = 1f - Mathf.Clamp01((alt - 90f) / 170f);
                 groundMat.color = gc;
             }
 
