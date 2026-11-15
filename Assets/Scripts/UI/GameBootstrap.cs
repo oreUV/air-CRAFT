@@ -275,7 +275,7 @@ namespace SpaceMissionDesign.UI
             accImg.raycastTarget = false;
 
             // Camera control hint on the 3D side of the screen.
-            NewText(parent, "LEFT-DRAG orbit  -  RIGHT-DRAG pan  -  SCROLL zoom  -  DOUBLE-CLICK recentre", 13,
+            NewText(parent, "MOVE MOUSE over the view to look  -  RIGHT-DRAG pan  -  SCROLL zoom  -  DOUBLE-CLICK recentre", 13,
                 new Vector2(900f, -480f), new Vector2(1000f, 24f), TextAnchor.MiddleCenter,
                 new Color(.75f, .85f, .95f));
         }

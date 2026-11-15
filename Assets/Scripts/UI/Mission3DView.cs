@@ -844,7 +844,8 @@ namespace SpaceMissionDesign.UI
 
         [Header("Feel")]
         public float zoomStep = .12f;
-        public float orbitSensitivity = .22f;   // degrees per pixel of mouse travel
+        public float orbitSensitivity = .22f;   // degrees per pixel while dragging
+        public float hoverSensitivity = .16f;   // degrees per pixel on plain mouse move over the 3D view
         public float keyOrbitSpeed = 90f;       // deg/s with arrow keys
         public float maxPanDistance = 70f;
 
@@ -861,6 +862,7 @@ namespace SpaceMissionDesign.UI
         private float lastLeftClick = -10f;
         private Vector3 lastMouse;
         private bool loggedInput;
+        private float lastDebugLog;
 
         private void LateUpdate()
         {
@@ -896,25 +898,39 @@ namespace SpaceMissionDesign.UI
             if (Mathf.Abs(distance - targetDistance) < .002f) distance = targetDistance;
 
             bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            bool overUI = PointerOverUI();
 
-            // --- LEFT-DRAG orbits. Raw mouse delta, no UI gate: dragging anywhere
-            //     (even over the left UI panel) rotates the camera. Buttons still
-            //     receive their own clicks through the EventSystem independently. ---
+            // Left button drag orbits from anywhere.
             if (Input.GetMouseButtonDown(0) && !shift)
             {
                 orbiting = true;
                 if (!loggedInput)
                 {
                     loggedInput = true;
-                    Debug.Log($"OrbitCamera: left-drag detected, orbiting camera (mouse at {mouse}).");
+                    Debug.Log($"OrbitCamera: left-drag detected at {mouse}. Hold the button and drag to orbit.");
                 }
             }
             if (Input.GetMouseButtonUp(0)) orbiting = false;
+
+            // Plain mouse movement over the 3D (right) half of the screen also orbits -
+            // no button required. This is the "move my mouse to change the camera" mode.
+            bool hoverLook = !overUI && !orbiting && mouse.x > Screen.width * .5f;
 
             if (orbiting)
             {
                 yaw += delta.x * orbitSensitivity;
                 pitch -= delta.y * orbitSensitivity;
+            }
+            else if (hoverLook && (Mathf.Abs(delta.x) > .01f || Mathf.Abs(delta.y) > .01f))
+            {
+                yaw += delta.x * hoverSensitivity;
+                pitch -= delta.y * hoverSensitivity;
+            }
+
+            if (Time.time - lastDebugLog > 1f && (orbiting || hoverLook) && (Mathf.Abs(delta.x) > .5f || Mathf.Abs(delta.y) > .5f))
+            {
+                lastDebugLog = Time.time;
+                Debug.Log($"OrbitCamera: yaw={yaw:F1} pitch={pitch:F1} dist={distance:F1} camPos={transform.position}");
             }
 
             // --- keyboard orbit fallback (always available) ---
@@ -933,7 +949,7 @@ namespace SpaceMissionDesign.UI
             }
 
             // --- DOUBLE-CLICK recentres (skipped when clicking a UI button) ---
-            if (Input.GetMouseButtonDown(0) && !shift && !PointerOverUI())
+            if (Input.GetMouseButtonDown(0) && !shift && !overUI)
             {
                 float now = Time.unscaledTime;
                 if (now - lastLeftClick < .28f) ResetView();
