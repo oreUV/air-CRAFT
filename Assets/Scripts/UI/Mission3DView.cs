@@ -71,6 +71,45 @@ namespace SpaceMissionDesign.UI
             BuildWorld();
             BuildCamera();
             Refresh(null);
+            Invoke(nameof(DumpDiagnostics), 1.5f);
+        }
+
+        /// <summary>
+        /// One-time render diagnostic. Logs which camera renders, which camera we drive,
+        /// and whether the key objects are visible / in front of the camera.
+        /// </summary>
+        private void DumpDiagnostics()
+        {
+            var cam = Camera.main;
+            Debug.Log($"[DIAG] pipeline={(UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline != null ? UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline.GetType().Name : "built-in")} standardShaderFound={Shader.Find("Standard") != null}");
+            Debug.Log($"[DIAG] cameraCount={Camera.allCamerasCount} main={(cam != null ? cam.name : "NULL")} " +
+                      $"enabled={(cam != null && cam.enabled)} rect={(cam != null ? cam.pixelRect.ToString() : "-")} " +
+                      $"pos={(cam != null ? cam.transform.position.ToString() : "-")} fwd={(cam != null ? cam.transform.forward.ToString() : "-")} " +
+                      $"fov={(cam != null ? cam.fieldOfView : 0f):F0} near={(cam != null ? cam.nearClipPlane : 0f)} far={(cam != null ? cam.farClipPlane : 0f)} " +
+                      $"clear={(cam != null ? cam.clearFlags.ToString() : "-")} mask={(cam != null ? cam.cullingMask : 0)}");
+            foreach (var c in Camera.allCameras)
+                Debug.Log($"[DIAG] camera '{c.name}' enabled={c.enabled} depth={c.depth} display={c.targetDisplay}");
+            DumpRenderer("Earth", earthSphere);
+            DumpRenderer("Moon", moonSphere);
+            DumpRenderer("Rocket", rocketRoot);
+            if (rocketRoot != null && cam != null)
+            {
+                var sp = cam.WorldToScreenPoint(rocketRoot.position + Vector3.up * 14f);
+                Debug.Log($"[DIAG] rocketScreenPoint={sp} screen={Screen.width}x{Screen.height} (z<0 = behind camera)");
+            }
+        }
+
+        private void DumpRenderer(string label, Transform t)
+        {
+            if (t == null) { Debug.Log($"[DIAG] {label}: transform NULL"); return; }
+            var rs = t.GetComponentsInChildren<Renderer>();
+            Debug.Log($"[DIAG] {label}: renderers={rs.Length}");
+            for (int i = 0; i < Mathf.Min(rs.Length, 5); i++)
+            {
+                var r = rs[i];
+                string shader = r.sharedMaterial != null ? r.sharedMaterial.shader.name : "no-material";
+                Debug.Log($"[DIAG]   {label}[{i}] '{r.name}' enabled={r.enabled} visible={r.isVisible} shader={shader} bounds={r.bounds}");
+            }
         }
 
         // ---------------- status for the HUD ----------------
@@ -221,6 +260,13 @@ namespace SpaceMissionDesign.UI
             // Moon: fixed far ahead along the flight path.
             moonSphere = Sphere("Moon", MoonCenter, MoonR * 2f, moonMat, null).transform;
 
+            // Temporary render check: an unlit magenta marker floating above the pad.
+            // If this is not visible on screen, nothing 3D is rendering at all.
+            var markerMat = new Material(Shader.Find("Unlit/Color") ?? Shader.Find("Standard"));
+            if (markerMat.HasProperty("_Color")) markerMat.SetColor("_Color", new Color(1f, 0f, .8f));
+            var marker = Cube("Render Check Marker", new Vector3(10f, 48f, 0f), new Vector3(4f, 4f, 4f), markerMat, null);
+            DontDestroyOnLoad(marker);
+
             BuildStars();
 
             if (Camera.main != null) Camera.main.backgroundColor = surfaceSky;
@@ -276,6 +322,22 @@ namespace SpaceMissionDesign.UI
             cam.fieldOfView = 42f;
             cam.nearClipPlane = .3f;
             cam.farClipPlane = 9000f; // reaches the Moon and the star shell
+
+            // Ensure exactly ONE camera renders the game view, and it covers the whole screen.
+            // A second enabled camera (e.g. a leftover scene camera) would draw over ours and
+            // make the orbiting camera appear frozen.
+            foreach (var other in Camera.allCameras)
+            {
+                if (other != cam)
+                {
+                    Debug.LogWarning($"Mission3DView: disabling extra camera '{other.name}' so the 3D scene renders.");
+                    other.enabled = false;
+                }
+            }
+            cam.enabled = true;
+            cam.cullingMask = ~0;
+            cam.rect = new Rect(0f, 0f, 1f, 1f);
+            cam.targetTexture = null;
 
             var focusGO = new GameObject("Camera Focus");
             focusGO.transform.position = focusHome;
