@@ -146,18 +146,19 @@ namespace SpaceMissionDesign.UI
             sun.transform.rotation = Quaternion.Euler(48f, -35f, 0f);
             DontDestroyOnLoad(lightGO);
 
-            // --- Earth: fills the view below the launch pad ---
-            earthSphere = Sphere("Earth", new Vector3(10f, -70f, -10f), 110f, earthMat, null).transform;
+            // --- Earth: huge planet directly below the pad; its surface is at y=0 ---
+            // Camera on the surface looks up at the rocket; Earth fills the lower view.
+            earthSphere = Sphere("Earth", new Vector3(10f, -300f, 0f), 300f, earthMat, null).transform;
 
-            // --- Cloud layer: slightly larger than Earth, transparent ---
-            cloudLayer = Sphere("Cloud layer", new Vector3(10f, -70f, -10f), 125f, cloudMat, null).transform;
+            // --- Cloud layer: just above Earth's surface, transparent ---
+            cloudLayer = Sphere("Cloud layer", new Vector3(10f, -300f, 0f), 310f, cloudMat, null).transform;
 
             // --- Launch pad sits on Earth's surface ---
             Cylinder("Launch pad", new Vector3(10f, 0f, 0f), 14f, .7f, pad, null);
             Cylinder("Pad ring", new Vector3(10f, .3f, 0f), 8f, .35f, grey, null);
 
             // --- Moon: far ahead in the direction of flight ---
-            moonSphere = Sphere("Moon", new Vector3(10f, 8f, 420f), 18f, moonMat, null).transform;
+            moonSphere = Sphere("Moon", new Vector3(10f, 0f, 900f), 25f, moonMat, null).transform;
 
             BuildStars();
 
@@ -536,8 +537,8 @@ namespace SpaceMissionDesign.UI
                 // Earth recedes below and grows (curved horizon).
                 if (earthSphere != null)
                 {
-                    float earthY = Mathf.Lerp(-70f, -220f, s);
-                    float earthScale = Mathf.Lerp(110f, 300f, s);
+                    float earthY = Mathf.Lerp(-300f, -900f, s);
+                    float earthScale = Mathf.Lerp(300f, 700f, s);
                     earthSphere.position = earthStart + new Vector3(0f, earthY - earthStart.y, 0f);
                     earthSphere.localScale = Vector3.one * earthScale;
                 }
@@ -555,7 +556,7 @@ namespace SpaceMissionDesign.UI
                         c.a = cloudAlpha;
                         cloudRend.material.color = c;
                     }
-                    cloudLayer.localScale = Vector3.one * Mathf.Lerp(125f, 320f, s);
+                    cloudLayer.localScale = Vector3.one * Mathf.Lerp(310f, 720f, s);
                 }
 
                 // Sky: surface blue -> space black.
@@ -583,8 +584,8 @@ namespace SpaceMissionDesign.UI
                 // Moon grows ahead.
                 if (moonSphere != null)
                 {
-                    float moonZ = Mathf.Lerp(420f, 340f, s);
-                    float moonScale = Mathf.Lerp(18f, 40f, s);
+                    float moonZ = Mathf.Lerp(900f, 500f, s);
+                    float moonScale = Mathf.Lerp(25f, 55f, s);
                     moonSphere.position = new Vector3(moonStart.x, moonStart.y, moonZ);
                     moonSphere.localScale = Vector3.one * moonScale;
                 }
