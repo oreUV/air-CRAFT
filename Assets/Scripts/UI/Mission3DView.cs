@@ -1341,13 +1341,13 @@ namespace SpaceMissionDesign.UI
             // Load each stage as its own root so they can separate independently later.
             // All are positioned in a vertical stack under "visual".
             stage1BottomRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+bottom", visual, new Vector3(0, 3f, 0), 6f, "Stage 1 bottom (S-IC)");
-            stage1TopRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+top", visual, new Vector3(0, 8f, 0), 6f, "Stage 1 top");
-            stage2Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-II", visual, new Vector3(0, 12f, 0), 5f, "Stage 2 (S-II)");
-            stage3Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IV+b", visual, new Vector3(0, 16f, 0), 4f, "Stage 3 (S-IVb final)");
-            serviceRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_service+module", visual, new Vector3(0, 19.5f, 0), 3f, "Service module");
-            commandRoot = PlaceStageFbx("Models/SaturnStages/command moduel", visual, new Vector3(0, 22f, 0), 2.5f, "Command module");
-            lmRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module", visual, new Vector3(0, 17f, 0), 3f, "Lunar module");
-            PlaceStageFbx("Models/SaturnStages/escape tower", visual, new Vector3(0, 24f, 0), 1.5f, "Escape tower");
+            stage1TopRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+top", visual, new Vector3(0, 9f, 0), 6f, "Stage 1 top");
+            stage2Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-II", visual, new Vector3(0, 14.5f, 0), 5f, "Stage 2 (S-II)");
+            stage3Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IV+b", visual, new Vector3(0, 19f, 0), 4f, "Stage 3 (S-IVb final)");
+            lmRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module", visual, new Vector3(0, 20.5f, 0), 2.5f, "Lunar module");
+            serviceRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_service+module", visual, new Vector3(0, 22.5f, 0), 3f, "Service module");
+            commandRoot = PlaceStageFbx("Models/SaturnStages/command moduel", visual, new Vector3(0, 25.25f, 0), 2.5f, "Command module");
+            PlaceStageFbx("Models/SaturnStages/escape tower", visual, new Vector3(0, 27.25f, 0), 1.5f, "Escape tower");
 
             if (stage1Root == null && stage2Root == null && stage3Root == null)
             {
@@ -1799,13 +1799,13 @@ namespace SpaceMissionDesign.UI
                     flightSpeed = Mathf.Min(flightSpeed + 1.2f * dt, speedCap);
 
                     // Pitch over toward the Moon through the upper atmosphere.
-                    float turn = Mathf.Clamp01((alt - turnStartAlt) / (AtmosphereTop - turnStartAlt));
+                    float turn = Mathf.Clamp01((alt - turnStartAlt) / (1600f - turnStartAlt));
                     flightDir = Vector3.Slerp(Vector3.up, toMoon, turn).normalized;
 
                     pos += flightDir * (flightSpeed * mv);
 
-                    // Stage 1 (S-IC) separates around 100 km.
-                    if (alt > 100f && !stage1Released)
+                    // Stage 1 (S-IC) separates around 42-68 miles (~700 units / ~78 km).
+                    if (alt > 700f && !stage1Released)
                     {
                         stage1Released = true;
                         ReleaseStage(stage1BottomRoot, flightDir, 4f, "Stage 1 bottom (S-IC)");
@@ -1813,18 +1813,21 @@ namespace SpaceMissionDesign.UI
                         phase = FlightPhase.Stage1Sep;
                         phaseElapsed = 0f;
                     }
-                    else if (alt > 180f && !stage2Released)
+                    // Stage 2 (S-II) separates around 109-115 miles (~1600 units / ~178 km).
+                    else if (alt > 1600f && !stage2Released)
                     {
                         stage2Released = true;
-                        ReleaseStage(stage2Root, flightDir, 2f, "Stage 2 (S-II)");
+                        ReleaseStage(stage2Root, flightDir, 3f, "Stage 2 (S-II)");
                         phase = FlightPhase.Stage2Sep;
                         phaseElapsed = 0f;
                     }
-                    else if (alt >= AtmosphereTop)
+                    else if (alt >= 1700f)
                     {
+                        // S-IVB takes over for TLI burn toward the Moon.
                         phase = FlightPhase.TransitToMoon;
                         phaseElapsed = 0f;
                         flightSpeed = 2f;
+                        SetBurn(true);
                     }
                     break;
                 }
