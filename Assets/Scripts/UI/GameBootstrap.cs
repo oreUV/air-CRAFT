@@ -251,52 +251,8 @@ namespace SpaceMissionDesign.UI
 
         private static void Background(Transform parent)
         {
-            // ---- Deep-space full-screen backdrop ----
-            var backdrop = NewRect(parent, "Space Backdrop", Vector2.zero, Vector2.zero);
-            backdrop.anchorMin = Vector2.zero;
-            backdrop.anchorMax = Vector2.one;
-            backdrop.offsetMin = Vector2.zero;
-            backdrop.offsetMax = Vector2.zero;
-            var backImg = backdrop.gameObject.AddComponent<Image>();
-            backImg.color = new Color(.008f, .010f, .020f);
-            backImg.raycastTarget = false;
-
-            // Subtle starfield particles across the backdrop.
-            var starGO = new GameObject("UI Starfield");
-            starGO.transform.SetParent(parent, false);
-            var starPS = starGO.AddComponent<ParticleSystem>();
-            var starMain = starPS.main;
-            starMain.startSpeed = 0f;
-            starMain.startLifetime = 9999f;
-            starMain.startSize = new ParticleSystem.MinMaxCurve(.05f, .15f);
-            starMain.maxParticles = 120;
-            starMain.simulationSpace = ParticleSystemSimulationSpace.World;
-            starMain.gravityModifier = 0f;
-            var starEmission = starPS.emission;
-            starEmission.enabled = false;
-            var starShape = starPS.shape;
-            starShape.shapeType = ParticleSystemShapeType.Rectangle;
-            starShape.scale = new Vector3(1920f, 1080f, 1f);
-            starShape.position = new Vector3(0f, 0f, 100f);
-            var starShader = Shader.Find("Particles/Standard Unlit");
-            if (starShader == null) starShader = Shader.Find("Sprites/Default");
-            var starMat = new Material(starShader != null ? starShader : Shader.Find("Unlit/Color"));
-            starMat.mainTexture = TextureGenerator.SoftDot();
-            if (starMat.HasProperty("_Color")) starMat.SetColor("_Color", new Color(.95f, .98f, 1f, .6f));
-            var starRenderer = starGO.GetComponent<ParticleSystemRenderer>();
-            starRenderer.material = starMat;
-            starRenderer.renderMode = ParticleSystemRenderMode.Billboard;
-            starPS.Emit(120);
-
-            // Subtle vignette around edges.
-            var vignette = NewRect(parent, "Vignette", Vector2.zero, Vector2.zero);
-            vignette.anchorMin = Vector2.zero;
-            vignette.anchorMax = Vector2.one;
-            vignette.offsetMin = Vector2.zero;
-            vignette.offsetMax = Vector2.zero;
-            var vigImg = vignette.gameObject.AddComponent<Image>();
-            vigImg.color = new Color(0f, 0f, 0f, .5f);
-            vigImg.raycastTarget = false;
+            // NOTE: no full-screen backdrop — the 3D scene provides its own sky/Earth
+            // background. A full-screen opaque Image here would hide the entire 3D view.
 
             // Dark panel behind the left-half UI so text stays readable over the 3D view.
             var panel = NewRect(parent, "UI Panel", Vector2.zero, new Vector2(960f, 1080f));
@@ -318,9 +274,9 @@ namespace SpaceMissionDesign.UI
             accImg.raycastTarget = false;
 
             // Camera control hint on the 3D side of the screen.
-            NewText(parent, "LEFT-DRAG to move  ·  RIGHT-DRAG to orbit  ·  SCROLL to zoom  ·  DOUBLE-CLICK to recentre", 13,
+            NewText(parent, "LEFT-DRAG move  -  RIGHT-DRAG orbit  -  SCROLL zoom  -  DOUBLE-CLICK recentre", 13,
                 new Vector2(900f, -480f), new Vector2(1000f, 24f), TextAnchor.MiddleCenter,
-                new Color(.45f, .55f, .70f));
+                new Color(.75f, .85f, .95f));
         }
 
         /// <summary>

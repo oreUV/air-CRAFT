@@ -303,11 +303,9 @@ namespace SpaceMissionDesign.UI
             foreach (var mf in go.GetComponentsInChildren<MeshFilter>())
             {
                 var mesh = mf != null ? mf.sharedMesh : null;
-                if (mesh == null) return false;
-                Vector3[] vertices;
-                try { vertices = mesh.vertices; }
-                catch (UnityException) { return false; }
+                if (mesh == null || !mesh.isReadable) return false;
                 var toWorld = mf.transform.localToWorldMatrix;
+                Vector3[] vertices = mesh.vertices;
                 int step = Mathf.Max(1, vertices.Length / 500);
                 for (int i = 0; i < vertices.Length; i += step)
                     points.Add(toWorld.MultiplyPoint3x4(vertices[i]));
