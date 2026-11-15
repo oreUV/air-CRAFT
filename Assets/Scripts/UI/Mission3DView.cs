@@ -203,32 +203,85 @@ namespace SpaceMissionDesign.UI
             pad = Mat("Pad", TextureGenerator.Metal(), tint: new Color(.18f, .19f, .21f), .15f, .35f);
             flag = Mat("Flag", TextureGenerator.Flag(), tint: Color.white, 0f, .3f);
 
-            earthTex = Resources.Load<Texture2D>("Textures/Earth (A)");
-            // Earth (B) turned out to be a rendered glowing-planet image, not an
-            // equirectangular cloud map, so cloud cover is generated instead: real
-            // tiled fbm fields with holes, which read as individual clouds.
-            cloudTex = CloudField(512, 6, 6f, .50f, .20f);
+            // Real 2048x1024 equirectangular maps (Solar System Scope, CC BY 4.0):
+            // the true Blue Marble surface, the true cloud cover, and the real Moon.
+            // They share one UV frame - north at v = 1, Greenwich at u = 0 - which is
+            // exactly what GlobeMesh generates, so Cape Canaveral lands under the pad
+            // and each cloud sits over the continent it actually covers.
+            earthTex = Resources.Load<Texture2D>("Textures/EarthSurface");
+            var cloudMap = Resources.Load<Texture2D>("Textures/EarthClouds");
+            var moonTex = Resources.Load<Texture2D>("Textures/MoonSurface");
 
-            earthMat = Mat("Earth", earthTex ?? TextureGenerator.Earth(), tint: Color.white, .02f, .2f, new Color(.02f, .06f, .12f));
+            // The cloud map is white-on-black, so its luminance is converted into an
+            // alpha coverage mask: the low deck keeps everything above a faint haze,
+            // the high deck keeps only the dense cores and reads as thin cirrus.
+            cloudTex = cloudMap != null ? CloudsFromLuminance(cloudMap, .10f, .85f, "Cloud coverage") : null;
+            if (cloudTex == null) cloudTex = CloudField(512, 6, 6f, .50f, .20f);   // fallback
+            var cirrusTex = cloudMap != null ? CloudsFromLuminance(cloudMap, .48f, 1f, "Cirrus coverage") : null;
+            if (cirrusTex == null) cirrusTex = CloudField(512, 5, 5f, .42f, .32f);
+
+            // A touch of self-illumination keeps the day map readable on the side of the
+            // globe away from the sun, instead of going pure black in shadow.
+            earthMat = Mat("Earth", earthTex ?? TextureGenerator.Earth(), tint: Color.white, .02f, .2f, new Color(.03f, .04f, .05f));
             earthMat.SetFloat("_Cull", 0f);   // never culled - a planet must be visible from any side
-            cloudMat = Mat("Clouds", cloudTex, tint: Color.white, 0f, .1f, null);
-            // Tiled so the field reads as individual clouds at launch-site scale.
-            cloudMat.mainTextureScale = new Vector2(24f, 12f);
-            SetTransparent(cloudMat, new Color(1f, 1f, 1f, .9f), 3000);
+            cloudMat = Mat("Clouds", cloudTex, tint: Color.white, 0f, .1f, new Color(.05f, .05f, .05f));
+            // Straight 1:1 - the deck shares the Earth's UV frame, so the real cloud
+            // patterns stay locked over the right landmasses.
+            cloudMat.mainTextureScale = Vector2.one;
+            SetTransparent(cloudMat, new Color(1f, 1f, 1f, .92f), 3000);
 
-            var cirrusTex = CloudField(512, 5, 5f, .42f, .32f);
             cirrusMat = Mat("Cirrus", cirrusTex, tint: new Color(.95f, .97f, 1f), 0f, .1f, null);
-            cirrusMat.mainTextureScale = new Vector2(40f, 20f);
-            SetTransparent(cirrusMat, new Color(.95f, .97f, 1f, .5f), 3001);
+            cirrusMat.mainTextureScale = Vector2.one;
+            // Nudged half a degree east so the thin deck is not a perfect shadow of the
+            // clouds below it.
+            cirrusMat.mainTextureOffset = new Vector2(.0015f, 0f);
+            SetTransparent(cirrusMat, new Color(.95f, .97f, 1f, .45f), 3001);
 
             groundMat = Mat("Ground", LocalGroundTexture(), tint: Color.white, .02f, .1f, new Color(.02f, .03f, .02f));
             MakeBlendable(groundMat, 2500);   // alpha is animated: the cap fades into the globe
 
-            moonMat = Mat("Moon", TextureGenerator.Moon(), tint: Color.white, .02f, .15f);
+            moonMat = Mat("Moon", moonTex ?? TextureGenerator.Moon(), tint: Color.white, .02f, .12f, new Color(.02f, .02f, .02f));
             moonMat.SetFloat("_Cull", 0f);
 
             flameMat = Mat("Flame", TextureGenerator.SoftDot(), tint: new Color(1f, .55f, .1f), 0f, .05f, new Color(1f, .4f, .05f) * 2.2f);
             exhaustMat = Mat("Exhaust", TextureGenerator.SoftDot(), tint: new Color(1f, .7f, .3f), 0f, .05f);
+        }
+
+        /// <summary>
+        /// Turns a white-on-black cloud map into a cloud texture: cloud density becomes
+        /// alpha coverage, everything else stays the same footprint. That keeps the real
+        /// cloud patterns aligned with the real continents on the globe below.
+        /// </summary>
+        private static Texture2D CloudsFromLuminance(Texture2D source, float lo, float hi, string name)
+        {
+            Color32[] src;
+            try { src = source.GetPixels32(); }
+            catch
+            {
+                Debug.LogWarning("Mission3DView: cloud map not readable; using procedural clouds.");
+                return null;
+            }
+            if (src == null || src.Length == 0) return null;
+
+            var tex = new Texture2D(source.width, source.height, TextureFormat.RGBA32, true)
+            {
+                wrapMode = TextureWrapMode.Repeat,
+                name = name
+            };
+            var dst = new Color32[src.Length];
+            float inv = 1f / Mathf.Max(.001f, hi - lo);
+
+            for (int i = 0; i < src.Length; i++)
+            {
+                float lum = (src[i].r * .299f + src[i].g * .587f + src[i].b * .114f) / 255f;
+                float a = Mathf.Clamp01((lum - lo) * inv);
+                a = a * a * (3f - 2f * a);            // soft, rounded edges
+                dst[i] = new Color32(255, 255, 255, (byte)(a * 255f));
+            }
+
+            tex.SetPixels32(dst);
+            tex.Apply();
+            return tex;
         }
 
         /// <summary>
@@ -333,8 +386,13 @@ namespace SpaceMissionDesign.UI
             BuildAtmosphere();
             BuildLaunchComplex();
 
-            // Moon: fixed far ahead along the flight path.
-            moonSphere = Sphere("Moon", MoonCenter, MoonR * 2f, moonMat, null).transform;
+            // Moon: fixed far ahead along the flight path, mapped with the real lunar
+            // south-up-free equirectangular image (north at +Y).
+            moonSphere = EquirectGlobe("Moon", MoonCenter, MoonR, moonMat, 128, 64).transform;
+            // The map is centred on selenographic 0 degrees, i.e. the middle of the near
+            // side, so it is turned to face the approaching vehicle (which comes in along
+            // -Z); the maria then read exactly like the Apollo photographs.
+            moonSphere.localRotation = Quaternion.Euler(0f, 180f, -6f);
 
             BuildPadSmoke();
 
@@ -431,10 +489,23 @@ namespace SpaceMissionDesign.UI
         // ---------------- launch-site ground texture ----------------
 
         /// <summary>
-        /// Coastal Florida-style ground: Atlantic to the east, a sand shoreline, then
-        /// mottled scrub and palmetto inland. North is up (v) and east is right (u).
+        /// Ground at the pad: real satellite imagery of Launch Complex 39A, so the hardstand,
+        /// the crawlerway heading for the VAB, the Indian River lagoon and the Atlantic
+        /// shoreline are the actual shapes at the actual place the Saturn V stood.
+        /// Falls back to an invented coast only if the image is missing.
         /// </summary>
         private static Texture2D LocalGroundTexture(int size = 1024)
+        {
+            var sat = Resources.Load<Texture2D>("Textures/PadGround");
+            if (sat != null) return sat;
+            return ProceduralGround(size);
+        }
+
+        /// <summary>
+        /// Invented coastal fallback: Atlantic to the east, a sand shoreline, then mottled
+        /// scrub and palmetto inland. Used only if the real imagery cannot be loaded.
+        /// </summary>
+        private static Texture2D ProceduralGround(int size)
         {
             var tex = new Texture2D(size, size, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp };
             var px = new Color32[size * size];
@@ -488,9 +559,8 @@ namespace SpaceMissionDesign.UI
                         float lagoon = 1f - Mathf.Clamp01(Mathf.Abs(d + .075f + .03f * Mathf.Sin(v * 5.5f)) / .022f);
                         c = Color.Lerp(c, shallow, lagoon * .75f);
                         c *= .90f + n2 * .18f;
-                        // Blend the very edge of the patch toward the planet texture tone.
-                        float edge = Mathf.Max(Mathf.Abs(u - .5f), Mathf.Abs(v - .5f)) * 2f;
-                        if (edge > .82f) c = Color.Lerp(c, new Color(.18f, .27f, .18f), (edge - .82f) / .18f);
+                        // No edge fade: the cap sits exactly on the globe it was cut from,
+                        // so the two meet seamlessly.
                     }
 
                     px[y * size + x] = c;
@@ -542,6 +612,71 @@ namespace SpaceMissionDesign.UI
         /// the point the launch pad stands on. Unity's primitive sphere has an unknown
         /// UV convention, so the mesh is generated here where the mapping is explicit.
         /// </summary>
+        /// <summary>
+        /// A globe with a plain equirectangular UV frame: north pole at +Y (v = 1),
+        /// longitude 0 at +Z, seam at the antimeridian. Used for the Moon, where the
+        /// real map must land right way up without any launch-site re-anchoring.
+        /// </summary>
+        private GameObject EquirectGlobe(string name, Vector3 center, float radius, Material mat, int lonSeg, int latSeg)
+        {
+            var go = new GameObject(name);
+            go.transform.position = center;
+            DontDestroyOnLoad(go);
+            var mf = go.AddComponent<MeshFilter>();
+            var mr = go.AddComponent<MeshRenderer>();
+            mf.sharedMesh = EquirectSphereMesh(radius, lonSeg, latSeg);
+            mr.sharedMaterial = mat;
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+            return go;
+        }
+
+        private static Mesh EquirectSphereMesh(float radius, int lonSeg, int latSeg)
+        {
+            var verts = new List<Vector3>((lonSeg + 1) * (latSeg + 1));
+            var uvs = new List<Vector2>(verts.Capacity);
+            var normals = new List<Vector3>(verts.Capacity);
+            var tris = new List<int>(lonSeg * latSeg * 6);
+
+            for (int y = 0; y <= latSeg; y++)
+            {
+                float v = y / (float)latSeg;
+                float lat = (v - .5f) * Mathf.PI;
+                float cl = Mathf.Cos(lat), sl = Mathf.Sin(lat);
+                for (int x = 0; x <= lonSeg; x++)
+                {
+                    float u = x / (float)lonSeg;
+                    float lon = (u - .5f) * Mathf.PI * 2f;
+                    var dir = new Vector3(cl * Mathf.Sin(lon), sl, cl * Mathf.Cos(lon)).normalized;
+                    verts.Add(dir * radius);
+                    normals.Add(dir);
+                    uvs.Add(new Vector2(u, v));
+                }
+            }
+
+            for (int y = 0; y < latSeg; y++)
+            {
+                for (int x = 0; x < lonSeg; x++)
+                {
+                    int a = y * (lonSeg + 1) + x;
+                    int b = a + 1;
+                    int c = a + lonSeg + 1;
+                    int d = c + 1;
+                    tris.Add(a); tris.Add(b); tris.Add(c);
+                    tris.Add(b); tris.Add(d); tris.Add(c);
+                }
+            }
+
+            var mesh = new Mesh { name = "Equirect globe", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            mesh.SetVertices(verts);
+            mesh.SetNormals(normals);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateBounds();
+            EnsureOutwardWinding(mesh, tris);
+            return mesh;
+        }
+
         private GameObject Planet(string name, Vector3 center, float radius, Material mat, int lonSeg = 96, int latSeg = 64)
         {
             var go = new GameObject(name);
@@ -612,20 +747,24 @@ namespace SpaceMissionDesign.UI
             mesh.SetUVs(0, uvs);
             mesh.SetTriangles(tris, 0);
             mesh.RecalculateBounds();
-
-            // Match the winding of a built-in sphere so the planet is never inside-out,
-            // whatever the renderer's front-face convention is.
-            if (Mathf.Sign(SignedVolume(mesh)) != ReferenceWinding())
-            {
-                for (int i = 0; i < tris.Count; i += 3)
-                {
-                    int t = tris[i];
-                    tris[i] = tris[i + 1];
-                    tris[i + 1] = t;
-                }
-                mesh.SetTriangles(tris, 0);
-            }
+            EnsureOutwardWinding(mesh, tris);
             return mesh;
+        }
+
+        /// <summary>
+        /// Matches the winding of a built-in sphere so the surface is never inside-out,
+        /// whatever the renderer's front-face convention is.
+        /// </summary>
+        private static void EnsureOutwardWinding(Mesh mesh, List<int> tris)
+        {
+            if (Mathf.Sign(SignedVolume(mesh)) == ReferenceWinding()) return;
+            for (int i = 0; i < tris.Count; i += 3)
+            {
+                int t = tris[i];
+                tris[i] = tris[i + 1];
+                tris[i + 1] = t;
+            }
+            mesh.SetTriangles(tris, 0);
         }
 
         private static float SignedVolume(Mesh mesh)
@@ -1293,7 +1432,7 @@ namespace SpaceMissionDesign.UI
             {
                 RenderSettings.fogColor = sky;
                 RenderSettings.fogStartDistance = Mathf.Lerp(80f, 2600f, skyT);
-                RenderSettings.fogEndDistance = Mathf.Lerp(480f, 9000f, skyT);
+                RenderSettings.fogEndDistance = Mathf.Lerp(480f, 26000f, skyT);
             }
 
             // Launch vibration: strongest at ignition, fading as the vehicle clears the pad.
