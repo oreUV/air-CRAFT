@@ -832,6 +832,8 @@ namespace SpaceMissionDesign.UI
     /// Orbit / pan / zoom camera driven by the mouse. Input stays live during flight -
     /// the camera simply keeps following the rocket while the player orbits it.
     /// LEFT-DRAG orbit · RIGHT-DRAG pan · SCROLL zoom · DOUBLE-CLICK recentre.
+    /// Arrow keys also orbit and +/- zoom as a fallback. Uses raw mouse deltas so it
+    /// never depends on Input Manager axis definitions.
     /// </summary>
     public sealed class OrbitCamera : MonoBehaviour
     {
@@ -842,7 +844,8 @@ namespace SpaceMissionDesign.UI
 
         [Header("Feel")]
         public float zoomStep = .12f;
-        public float orbitSensitivity = 4f;
+        public float orbitSensitivity = .22f;   // degrees per pixel of mouse travel
+        public float keyOrbitSpeed = 90f;       // deg/s with arrow keys
         public float maxPanDistance = 70f;
 
         public float pitch = 5f;
@@ -853,9 +856,11 @@ namespace SpaceMissionDesign.UI
         private Vector3 panWanted;
         private Vector3 panApplied;
         private bool initialised;
-        private bool rightPan;
+        private bool orbiting;
+        private bool panning;
         private float lastLeftClick = -10f;
         private Vector3 lastMouse;
+        private bool loggedInput;
 
         private void LateUpdate()
         {
@@ -873,6 +878,7 @@ namespace SpaceMissionDesign.UI
             Vector3 delta = mouse - lastMouse;
             lastMouse = mouse;
 
+            // --- zoom: scroll wheel (mouse must be over the game window for this to fire) ---
             float scroll = Input.mouseScrollDelta.y;
             if (Mathf.Abs(scroll) > .01f)
             {
@@ -880,28 +886,53 @@ namespace SpaceMissionDesign.UI
                 targetDistance = Mathf.Clamp(targetDistance * factor, minDistance, maxDistance);
             }
 
+            // --- zoom fallback: +/- keys ---
+            if (Input.GetKey(KeyCode.Equals) || Input.GetKey(KeyCode.KeypadPlus))
+                targetDistance = Mathf.Clamp(targetDistance * (1f - .8f * dt), minDistance, maxDistance);
+            if (Input.GetKey(KeyCode.Minus) || Input.GetKey(KeyCode.KeypadMinus))
+                targetDistance = Mathf.Clamp(targetDistance * (1f + .8f * dt), minDistance, maxDistance);
+
             distance = Mathf.Lerp(distance, targetDistance, 1f - Mathf.Exp(-14f * dt));
             if (Mathf.Abs(distance - targetDistance) < .002f) distance = targetDistance;
 
             bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
 
-            // LEFT-DRAG orbits (the natural "move the mouse to look around" gesture).
-            if (Input.GetMouseButton(0) && !shift && !PointerOverUI())
+            // --- LEFT-DRAG orbits. Raw mouse delta, no UI gate: dragging anywhere
+            //     (even over the left UI panel) rotates the camera. Buttons still
+            //     receive their own clicks through the EventSystem independently. ---
+            if (Input.GetMouseButtonDown(0) && !shift)
             {
-                yaw += Input.GetAxis("Mouse X") * orbitSensitivity;
-                pitch -= Input.GetAxis("Mouse Y") * orbitSensitivity;
+                orbiting = true;
+                if (!loggedInput)
+                {
+                    loggedInput = true;
+                    Debug.Log($"OrbitCamera: left-drag detected, orbiting camera (mouse at {mouse}).");
+                }
+            }
+            if (Input.GetMouseButtonUp(0)) orbiting = false;
+
+            if (orbiting)
+            {
+                yaw += delta.x * orbitSensitivity;
+                pitch -= delta.y * orbitSensitivity;
             }
 
-            // RIGHT-DRAG (or MIDDLE-DRAG, or SHIFT+drag) pans.
-            rightPan = Input.GetMouseButton(1) || Input.GetMouseButton(2) || (shift && Input.GetMouseButton(0));
-            if (rightPan)
+            // --- keyboard orbit fallback (always available) ---
+            if (Input.GetKey(KeyCode.LeftArrow)) yaw -= keyOrbitSpeed * dt;
+            if (Input.GetKey(KeyCode.RightArrow)) yaw += keyOrbitSpeed * dt;
+            if (Input.GetKey(KeyCode.UpArrow)) pitch += keyOrbitSpeed * dt;
+            if (Input.GetKey(KeyCode.DownArrow)) pitch -= keyOrbitSpeed * dt;
+
+            // --- RIGHT/MIDDLE-DRAG pans ---
+            panning = Input.GetMouseButton(1) || Input.GetMouseButton(2) || (shift && Input.GetMouseButton(0));
+            if (panning)
             {
                 float worldPerPixel = WorldUnitsPerPixel();
                 panWanted -= (transform.right * delta.x + transform.up * delta.y) * worldPerPixel;
                 panWanted = Vector3.ClampMagnitude(panWanted, maxPanDistance);
             }
 
-            // DOUBLE-CLICK recentres on the rocket.
+            // --- DOUBLE-CLICK recentres (skipped when clicking a UI button) ---
             if (Input.GetMouseButtonDown(0) && !shift && !PointerOverUI())
             {
                 float now = Time.unscaledTime;
