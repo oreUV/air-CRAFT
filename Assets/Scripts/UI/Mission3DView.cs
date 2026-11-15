@@ -28,7 +28,7 @@ namespace SpaceMissionDesign.UI
         // ---------------- staging: separate roots so each piece can fly on its own ----------------
         // rocketRoot is always the "active" vehicle the camera follows (command module on return).
         // Staged pieces are unparented and given independent trajectories at separation events.
-        private Transform stage1Root, stage2Root, stage3Root, lmRoot, commandRoot, serviceRoot;
+        private Transform stage1Root, stage1BottomRoot, stage1TopRoot, stage2Root, stage3Root, lmRoot, commandRoot, serviceRoot;
         private bool stage1Released, stage2Released, stage3Released, lmDeployed, lmLanded, lmDocked;
         private float lmLandingTime;      // time LM touched down (for the 10s stay)
         private Vector3 stage3Vel, lmVel; // independent velocity for released pieces
@@ -1314,7 +1314,8 @@ namespace SpaceMissionDesign.UI
         {
             // Destroy everything from the previous flight.
             if (rocketRoot != null) Destroy(rocketRoot.gameObject);
-            if (stage1Root != null) Destroy(stage1Root.gameObject);
+            if (stage1BottomRoot != null) Destroy(stage1BottomRoot.gameObject);
+            if (stage1TopRoot != null) Destroy(stage1TopRoot.gameObject);
             if (stage2Root != null) Destroy(stage2Root.gameObject);
             if (stage3Root != null) Destroy(stage3Root.gameObject);
             if (lmRoot != null) Destroy(lmRoot.gameObject);
@@ -1339,14 +1340,14 @@ namespace SpaceMissionDesign.UI
 
             // Load each stage as its own root so they can separate independently later.
             // All are positioned in a vertical stack under "visual".
-            stage1Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+bottom.fbx", visual, new Vector3(0, 3f, 0), 6f, "Stage 1 (S-IC)");
-            stage1Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+top.fbx", visual, new Vector3(0, 8f, 0), 6f, "Stage 1 top");
-            stage2Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-II.fbx", visual, new Vector3(0, 12f, 0), 5f, "Stage 2 (S-II)");
-            stage3Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IV+b.fbx", visual, new Vector3(0, 16f, 0), 4f, "Stage 3 (S-IVb final)");
-            serviceRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_service+module.fbx", visual, new Vector3(0, 19.5f, 0), 3f, "Service module");
-            commandRoot = PlaceStageFbx("Models/SaturnStages/command moduel.fbx", visual, new Vector3(0, 22f, 0), 2.5f, "Command module");
-            lmRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module.fbx", visual, new Vector3(0, 17f, 0), 3f, "Lunar module");
-            PlaceStageFbx("Models/SaturnStages/escape tower.fbx", visual, new Vector3(0, 24f, 0), 1.5f, "Escape tower");
+            stage1BottomRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+bottom", visual, new Vector3(0, 3f, 0), 6f, "Stage 1 bottom (S-IC)");
+            stage1TopRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+top", visual, new Vector3(0, 8f, 0), 6f, "Stage 1 top");
+            stage2Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-II", visual, new Vector3(0, 12f, 0), 5f, "Stage 2 (S-II)");
+            stage3Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IV+b", visual, new Vector3(0, 16f, 0), 4f, "Stage 3 (S-IVb final)");
+            serviceRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_service+module", visual, new Vector3(0, 19.5f, 0), 3f, "Service module");
+            commandRoot = PlaceStageFbx("Models/SaturnStages/command moduel", visual, new Vector3(0, 22f, 0), 2.5f, "Command module");
+            lmRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module", visual, new Vector3(0, 17f, 0), 3f, "Lunar module");
+            PlaceStageFbx("Models/SaturnStages/escape tower", visual, new Vector3(0, 24f, 0), 1.5f, "Escape tower");
 
             if (stage1Root == null && stage2Root == null && stage3Root == null)
             {
@@ -1803,15 +1804,16 @@ namespace SpaceMissionDesign.UI
 
                     pos += flightDir * (flightSpeed * mv);
 
-                    // Stage 1 (S-IC) separates around 65 km.
-                    if (alt > 65f && !stage1Released)
+                    // Stage 1 (S-IC) separates around 100 km.
+                    if (alt > 100f && !stage1Released)
                     {
                         stage1Released = true;
-                        ReleaseStage(stage1Root, flightDir, 3f, "Stage 1 (S-IC)");
+                        ReleaseStage(stage1BottomRoot, flightDir, 4f, "Stage 1 bottom (S-IC)");
+                        ReleaseStage(stage1TopRoot, flightDir, 4f, "Stage 1 top");
                         phase = FlightPhase.Stage1Sep;
                         phaseElapsed = 0f;
                     }
-                    else if (alt > 130f && !stage2Released)
+                    else if (alt > 180f && !stage2Released)
                     {
                         stage2Released = true;
                         ReleaseStage(stage2Root, flightDir, 2f, "Stage 2 (S-II)");
