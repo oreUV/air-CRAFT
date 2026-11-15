@@ -905,14 +905,19 @@ namespace SpaceMissionDesign.UI
         private static void MakeBlendable(Material m, int queue)
         {
             m.SetOverrideTag("RenderType", "Transparent");
-            if (m.HasProperty("_Mode")) m.SetFloat("_Mode", 3f);
-            if (m.HasProperty("_SrcBlend")) m.SetFloat("_SrcBlend", 1f);
-            if (m.HasProperty("_DstBlend")) m.SetFloat("_DstBlend", 10f);
+            // Standard-shader "Fade" mode. The previous setup used the Transparent palette
+            // (Mode 3 / SrcBlend One), which expects premultiplied colour and therefore
+            // rendered every deck, haze shell and alpha-faded cap fully opaque - a solid
+            // white sheet. SrcAlpha blending is what actually respects the alpha mask.
+            if (m.HasProperty("_Mode")) m.SetFloat("_Mode", 2f);
+            if (m.HasProperty("_SrcBlend")) m.SetFloat("_SrcBlend", 5f);   // SrcAlpha
+            if (m.HasProperty("_DstBlend")) m.SetFloat("_DstBlend", 10f);  // OneMinusSrcAlpha
             if (m.HasProperty("_ZWrite")) m.SetFloat("_ZWrite", 0f);
             if (m.HasProperty("_Cull")) m.SetFloat("_Cull", 0f);
             if (m.HasProperty("_Glossiness")) m.SetFloat("_Glossiness", 0f);
             if (m.HasProperty("_Metallic")) m.SetFloat("_Metallic", 0f);
             m.DisableKeyword("_ALPHATEST_ON");
+            m.DisableKeyword("_ALPHAPREMULTIPLY_ON");
             m.EnableKeyword("_ALPHABLEND_ON");
             m.renderQueue = queue;
         }
@@ -1624,7 +1629,9 @@ namespace SpaceMissionDesign.UI
             var pos = rocketRoot.position;
             // Everything that moves advances on the warped clock; the countdown and the
             // ignition sequence keep real time so liftoff is never fast-forwarded.
-            float dt = Time.deltaTime * Warp;
+            // The frame delta is clamped: a stall at 10000x would otherwise multiply a
+            // one-second hitch into a jump across the whole solar system.
+            float dt = Mathf.Min(Time.deltaTime, .05f) * Warp;
             Vector3 toMoon = (MoonCenter - EarthCenter).normalized;
             Vector3 upNow = (pos - EarthCenter).normalized;
             float alt = (pos - EarthCenter).magnitude - EarthR - PadTop;
@@ -1681,7 +1688,7 @@ namespace SpaceMissionDesign.UI
                     // time the real Saturn V took to clear 100 km. No hidden speed ramp:
                     // what you see is the vehicle travelling at that speed.
                     const float turnStartAlt = 60f;
-                    float speedCap = 2f + .020f * alt;
+                    float speedCap = Mathf.Min(2f + .018f * alt, 16f);
                     flightSpeed = Mathf.Min(flightSpeed + 1.2f * dt, speedCap);
 
                     // Pitch over toward the Moon through the upper atmosphere (gravity turn).
@@ -1694,16 +1701,17 @@ namespace SpaceMissionDesign.UI
                     {
                         phase = FlightPhase.TransitToMoon;
                         phaseElapsed = 0f;
-                        flightSpeed = 6f;
+                        flightSpeed = 2f;
                     }
                     break;
                 }
 
                 case FlightPhase.TransitToMoon:
                 {
-                    // A slow coast on purpose. This is the leg the time warp exists for:
-                    // at 50x the crossing takes ~18 s, at 1000x it is over in under a second.
-                    flightSpeed = 6f;
+                    // A genuine coast at 1x - slow enough to read as a spacecraft, not a
+                    // star streak. Time compression is what covers this leg: at 50x the
+                    // crossing is minutes, at 1000x it is seconds.
+                    flightSpeed = 2f;
                     AdvanceToward(ref pos, MoonCenter, flightSpeed, dt);
 
                     float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
@@ -1719,7 +1727,7 @@ namespace SpaceMissionDesign.UI
                 {
                     float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
                     float brake = Mathf.Clamp01(1f - distMoonSurf / 850f);
-                    flightSpeed = Mathf.Lerp(6f, 1.2f, brake * brake);
+                    flightSpeed = Mathf.Lerp(2f, .6f, brake * brake);
                     AdvanceToward(ref pos, MoonCenter, flightSpeed, dt);
 
                     if (distMoonSurf < 60f)
@@ -1760,11 +1768,11 @@ namespace SpaceMissionDesign.UI
                     if (distHomeSurf < 900f)
                     {
                         float brake = Mathf.Clamp01(1f - distHomeSurf / 900f);
-                        flightSpeed = Mathf.Max(Mathf.Lerp(6f, .8f, brake * brake), .8f);
+                        flightSpeed = Mathf.Max(Mathf.Lerp(2f, .5f, brake * brake), .5f);
                     }
                     else
                     {
-                        flightSpeed = Mathf.Min(flightSpeed + 2f * dt, 6f);
+                        flightSpeed = Mathf.Min(flightSpeed + .8f * dt, 2f);
                     }
                     AdvanceToward(ref pos, home, flightSpeed, dt);
 
@@ -1779,7 +1787,7 @@ namespace SpaceMissionDesign.UI
                 case FlightPhase.EarthArrival:
                 {
                     float altHome = (pos - EarthCenter).magnitude - EarthR - PadTop;
-                    flightSpeed = Mathf.Max(flightSpeed - 1.2f * dt, .8f);
+                    flightSpeed = Mathf.Max(flightSpeed - 1.2f * dt, .5f);
                     AdvanceToward(ref pos, EarthCenter, flightSpeed, dt);
 
                     if (altHome <= .5f)
