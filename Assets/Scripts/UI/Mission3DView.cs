@@ -12,7 +12,7 @@ namespace SpaceMissionDesign.UI
         /// <summary>Fired once when the full Earth->Moon->Earth flight completes (or is skipped).</summary>
         public static Action MissionComplete;
 
-        public enum FlightPhase { PreLaunch, Countdown, Ignition, Ascent, TransitToMoon, MoonArrival, MoonLanding, MoonStay, MoonLaunch, ReturnToEarth, EarthArrival, Complete }
+        public enum FlightPhase { PreLaunch, Countdown, Ignition, Ascent, Stage1Sep, Stage2Sep, TransitToMoon, FinalStageCommence, LMDeployment, LunarOrbit, MoonLanding, MoonStay, MoonLaunch, Docking, ReturnToEarth, EarthArrival, Complete }
 
         private Transform rocketRoot;
         private Transform focus;
@@ -24,6 +24,14 @@ namespace SpaceMissionDesign.UI
         private ParticleSystem exhaust;
         private Vector3 focusHome = new Vector3(10f, PadTop + RocketHeight * .5f, 0f);
         private Material white, metal, dark, gold, blue, grey, red, pad, flag, earthMat, moonMat, flameMat, exhaustMat, cloudMat, cirrusMat;
+
+        // ---------------- staging: separate roots so each piece can fly on its own ----------------
+        // rocketRoot is always the "active" vehicle the camera follows (command module on return).
+        // Staged pieces are unparented and given independent trajectories at separation events.
+        private Transform stage1Root, stage2Root, stage3Root, lmRoot, commandRoot, serviceRoot;
+        private bool stage1Released, stage2Released, stage3Released, lmDeployed, lmLanded, lmDocked;
+        private float lmLandingTime;      // time LM touched down (for the 10s stay)
+        private Vector3 stage3Vel, lmVel; // independent velocity for released pieces
 
         // ---------------- world layout (all fixed; the rocket travels through it) ----------------
         // A 1600-unit planet with the pad on its +Y pole keeps the ground FLAT at ground
@@ -190,12 +198,16 @@ namespace SpaceMissionDesign.UI
                         return $"COUNTDOWN  T-{Mathf.Max(0f, CountdownSeconds - phaseElapsed):F0}s  -  ALL SYSTEMS GO";
                     case FlightPhase.Ignition: return "IGNITION  -  HOLD-DOWN CLAMPS RELEASING";
                     case FlightPhase.Ascent: return $"ASCENT  ·  ALT {AltitudeUnits * kmPerUnit:N0} km";
+                    case FlightPhase.Stage1Sep: return "STAGE SEP  ·  S-IC (FIRST STAGE) RELEASED";
+                    case FlightPhase.Stage2Sep: return "STAGE SEP  ·  S-II (SECOND STAGE) RELEASED";
                     case FlightPhase.TransitToMoon: return $"TRANSLUNAR  ·  MOON {Vector3.Distance(rocketRoot != null ? rocketRoot.position : EarthCenter, MoonCenter) * kmPerLunarUnit:N0} km";
-                    case FlightPhase.MoonArrival: return "LUNAR APPROACH  ·  BRAKING";
-                    case FlightPhase.MoonLanding: return "LUNAR LANDING  ·  DOCKING ON SURFACE";
+                    case FlightPhase.FinalStageCommence: return "FINAL STAGE  ·  S-IVb LUNAR INSERTION BURN";
+                    case FlightPhase.LMDeployment: return "LM DEPLOY  ·  LUNAR MODULE DESCENDING";
+                    case FlightPhase.MoonLanding: return "LUNAR LANDING  ·  TOUCHDOWN";
                     case FlightPhase.MoonStay: return $"LUNAR SURFACE  ·  {(phaseElapsed - MoonStayTotal < 0 ? $"T-{MoonStayTotal - (phaseElapsed - MoonStayTotal):F0}s" : "")}";
-                    case FlightPhase.MoonLaunch: return "LUNAR LAUNCH  ·  ASCENDING TO ORBIT";
-                    case FlightPhase.ReturnToEarth: return $"TRANS-EARTH  ·  HOME {Vector3.Distance(rocketRoot != null ? rocketRoot.position : MoonCenter, new Vector3(10f, 0f, 0f)) * kmPerLunarUnit:N0} km";
+                    case FlightPhase.MoonLaunch: return "LUNAR LAUNCH  ·  ASCENDING TO DOCK";
+                    case FlightPhase.Docking: return "DOCKED  ·  LM AND FINAL STAGE IN LUNAR ORBIT";
+                    case FlightPhase.ReturnToEarth: return $"TRANS-EARTH  ·  COMMAND MODULE HOME {Vector3.Distance(rocketRoot != null ? rocketRoot.position : MoonCenter, new Vector3(10f, 0f, 0f)) * kmPerLunarUnit:N0} km";
                     case FlightPhase.EarthArrival: return "ENTRY  ·  DESCENDING";
                     default: return "MISSION COMPLETE";
                 }
@@ -1300,28 +1312,45 @@ namespace SpaceMissionDesign.UI
 
         public void Refresh(SpacecraftDesign design)
         {
+            // Destroy everything from the previous flight.
             if (rocketRoot != null) Destroy(rocketRoot.gameObject);
+            if (stage1Root != null) Destroy(stage1Root.gameObject);
+            if (stage2Root != null) Destroy(stage2Root.gameObject);
+            if (stage3Root != null) Destroy(stage3Root.gameObject);
+            if (lmRoot != null) Destroy(lmRoot.gameObject);
+            if (commandRoot != null) Destroy(commandRoot.gameObject);
+            if (serviceRoot != null) Destroy(serviceRoot.gameObject);
             ResetFlightState();
 
-            // rocketRoot lives in world space and is what the flight state machine moves.
-            // All artwork is authored at RocketModelHeight (28 units) and built under a
-            // "visual" child scaled by VehicleScale, so the whole stack - model, plume
-            // and vapour trail - shrinks to RocketHeight without touching the flight code.
+            // rocketRoot is the "active" vehicle the camera follows.
+            // During launch it holds the whole stack; on return it's just the command pod.
             var root = new GameObject("Rocket").transform;
             root.position = rocketPadHome;
             root.rotation = Quaternion.identity;
             rocketRoot = root;
+            DontDestroyOnLoad(root.gameObject);
 
+            // visual child holds all artwork scaled to RocketHeight.
             var visual = new GameObject("Vehicle").transform;
             visual.SetParent(root, false);
             visual.localPosition = Vector3.zero;
             visual.localRotation = Quaternion.identity;
             visual.localScale = Vector3.one * VehicleScale;
 
-            var saturnV = PlaceSaturnVFbx(visual, Vector3.zero, RocketModelHeight);
+            // Load each stage as its own root so they can separate independently later.
+            // All are positioned in a vertical stack under "visual".
+            stage1Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+bottom.fbx", visual, new Vector3(0, 3f, 0), 6f, "Stage 1 (S-IC)");
+            stage1Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IC+top.fbx", visual, new Vector3(0, 8f, 0), 6f, "Stage 1 top");
+            stage2Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-II.fbx", visual, new Vector3(0, 12f, 0), 5f, "Stage 2 (S-II)");
+            stage3Root = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_S-IV+b.fbx", visual, new Vector3(0, 16f, 0), 4f, "Stage 3 (S-IVb final)");
+            serviceRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_service+module.fbx", visual, new Vector3(0, 19.5f, 0), 3f, "Service module");
+            commandRoot = PlaceStageFbx("Models/SaturnStages/command moduel.fbx", visual, new Vector3(0, 22f, 0), 2.5f, "Command module");
+            lmRoot = PlaceStageFbx("Models/SaturnStages/ImageToStl.com_Apollo+Lunar+Module.fbx", visual, new Vector3(0, 17f, 0), 3f, "Lunar module");
+            PlaceStageFbx("Models/SaturnStages/escape tower.fbx", visual, new Vector3(0, 24f, 0), 1.5f, "Escape tower");
 
-            if (saturnV == null)
+            if (stage1Root == null && stage2Root == null && stage3Root == null)
             {
+                // Primitive fallback if FBXs are missing.
                 Cylinder("Stage 1", new Vector3(0, Stage1Base + Stage1H * .5f, 0), Stage1D * .5f, Stage1H, white, visual);
                 Cylinder("Stage 2", new Vector3(0, Stage2Base + Stage2H * .5f, 0), Stage2D * .5f, Stage2H, metal, visual);
                 Cylinder("Service module", new Vector3(0, ServiceBase + ServiceH * .5f, 0), ServiceD * .5f, ServiceH, metal, visual);
@@ -1340,8 +1369,6 @@ namespace SpaceMissionDesign.UI
             if (focus != null) focus.position = focusHome;
             if (cameraRig != null) cameraRig.ResetView();
             if (Camera.main != null) Camera.main.backgroundColor = surfaceSky;
-
-            DontDestroyOnLoad(root.gameObject);
         }
 
         private void ResetFlightState()
@@ -1356,6 +1383,15 @@ namespace SpaceMissionDesign.UI
             engineCut = false;
             rocketPitch = 0f; rocketYaw = 0f; rocketManual = false;
             moonLanded = false;
+            stage1Released = false;
+            stage2Released = false;
+            stage3Released = false;
+            lmDeployed = false;
+            lmLanded = false;
+            lmDocked = false;
+            lmLandingTime = 0f;
+            stage3Vel = Vector3.zero;
+            lmVel = Vector3.zero;
             if (flame != null) flame.gameObject.SetActive(false);
             if (exhaust != null)
             {
@@ -1365,6 +1401,43 @@ namespace SpaceMissionDesign.UI
             ArmPadSmoke(false);
             if (cameraRig != null) cameraRig.shake = 0f;
         }
+
+        /// <summary>
+        /// Loads an FBX from Resources, scales it to targetHeight, and places it at localPos
+        /// under the given parent. Returns the instance's transform (still parented).
+        /// </summary>
+        private Transform PlaceStageFbx(string resourcePath, Transform parent, Vector3 localPos, float targetHeight, string name)
+        {
+            var prefab = Resources.Load<GameObject>(resourcePath);
+            if (prefab == null) return null;
+            var go = Instantiate(prefab, parent);
+            go.name = name;
+            go.transform.localPosition = localPos;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
+
+            foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
+            foreach (var anim in go.GetComponentsInChildren<Animator>()) Destroy(anim);
+
+            if (TryLocalBounds(go, parent, out var bounds))
+            {
+                var upright = AxisToUpRotation(bounds.size);
+                if (upright != Quaternion.identity)
+                {
+                    go.transform.localRotation = upright;
+                    if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
+                }
+                float h = Mathf.Max(bounds.size.y, .0001f);
+                var scale = Vector3.one * (targetHeight / h);
+                go.transform.localScale = scale;
+                Vector3 min = Vector3.Scale(bounds.min, scale);
+                Vector3 max = Vector3.Scale(bounds.max, scale);
+                Vector3 centre = (min + max) * .5f;
+                go.transform.localPosition = localPos - new Vector3(centre.x, min.y, centre.z);
+            }
+            return go.transform;
+        }
+
 
         /// <summary>
         /// Vapour/exhaust trail under the engines. Particles are simulated in world space
@@ -1579,7 +1652,8 @@ namespace SpaceMissionDesign.UI
                 }
 
                 case FlightPhase.TransitToMoon:
-                case FlightPhase.MoonArrival:
+                case FlightPhase.FinalStageCommence:
+                case FlightPhase.LMDeployment:
                     cameraRig.cinematicPitch = 16f;
                     cameraRig.cinematicYaw = 85f;
                     cameraRig.cinematicDistance = 70f;
@@ -1718,22 +1792,33 @@ namespace SpaceMissionDesign.UI
 
                 case FlightPhase.Ascent:
                 {
-                    // Real ascent pacing. The stack leaves the pad at about 2 units/s and
-                    // accelerates as the air thins, reaching ~20 units/s at the top of the
-                    // atmosphere - which is roughly two minutes of flight at 1x, the same
-                    // time the real Saturn V took to clear 100 km. No hidden speed ramp:
-                    // what you see is the vehicle travelling at that speed.
+                    // Real ascent pacing.
                     const float turnStartAlt = 60f;
                     float speedCap = Mathf.Min(2f + .018f * alt, 16f);
                     flightSpeed = Mathf.Min(flightSpeed + 1.2f * dt, speedCap);
 
-                    // Pitch over toward the Moon through the upper atmosphere (gravity turn).
+                    // Pitch over toward the Moon through the upper atmosphere.
                     float turn = Mathf.Clamp01((alt - turnStartAlt) / (AtmosphereTop - turnStartAlt));
                     flightDir = Vector3.Slerp(Vector3.up, toMoon, turn).normalized;
 
                     pos += flightDir * (flightSpeed * mv);
 
-                    if (alt >= AtmosphereTop)
+                    // Stage 1 (S-IC) separates around 65 km.
+                    if (alt > 65f && !stage1Released)
+                    {
+                        stage1Released = true;
+                        ReleaseStage(stage1Root, flightDir, 3f, "Stage 1 (S-IC)");
+                        phase = FlightPhase.Stage1Sep;
+                        phaseElapsed = 0f;
+                    }
+                    else if (alt > 130f && !stage2Released)
+                    {
+                        stage2Released = true;
+                        ReleaseStage(stage2Root, flightDir, 2f, "Stage 2 (S-II)");
+                        phase = FlightPhase.Stage2Sep;
+                        phaseElapsed = 0f;
+                    }
+                    else if (alt >= AtmosphereTop)
                     {
                         phase = FlightPhase.TransitToMoon;
                         phaseElapsed = 0f;
@@ -1742,106 +1827,193 @@ namespace SpaceMissionDesign.UI
                     break;
                 }
 
+                case FlightPhase.Stage1Sep:
+                {
+                    // Brief coast while stage 1 falls away; resume ascent with stage 2.
+                    pos += flightDir * (flightSpeed * mv);
+                    if (phaseElapsed > 1.5f)
+                    {
+                        phase = FlightPhase.Ascent;
+                        phaseElapsed = 0f;
+                    }
+                    break;
+                }
+
+                case FlightPhase.Stage2Sep:
+                {
+                    // Brief coast while stage 2 falls away; resume ascent with final stage.
+                    pos += flightDir * (flightSpeed * mv);
+                    if (phaseElapsed > 1.5f)
+                    {
+                        phase = FlightPhase.Ascent;
+                        phaseElapsed = 0f;
+                    }
+                    break;
+                }
+
                 case FlightPhase.TransitToMoon:
                 {
-                    // A genuine coast at 1x - slow enough to read as a spacecraft, not a
-                    // star streak. Time compression is what covers this leg: at 50x the
-                    // crossing is minutes, at 1000x it is seconds.
+                    // Coast toward the Moon at 1x; time warp compresses this leg.
                     flightSpeed = 2f;
                     AdvanceToward(ref pos, MoonCenter, flightSpeed, mv);
 
                     float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
                     if (distMoonSurf < 850f)
                     {
-                        phase = FlightPhase.MoonArrival;
+                        // Close to the Moon: the final stage (S-IVb) commences the
+                        // lunar insertion burn and releases the LM.
+                        phase = FlightPhase.FinalStageCommence;
                         phaseElapsed = 0f;
+                        flightSpeed = 1.5f;
+                        SetBurn(true);
                     }
                     break;
                 }
 
-                case FlightPhase.MoonArrival:
+                case FlightPhase.FinalStageCommence:
                 {
-                    float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
-                    float brake = Mathf.Clamp01(1f - distMoonSurf / 850f);
-                    flightSpeed = Mathf.Lerp(2f, .6f, brake * brake);
+                    // Final stage circularises around the Moon then deploys the LM.
+                    flightSpeed = 1.5f;
                     AdvanceToward(ref pos, MoonCenter, flightSpeed, mv);
+                    float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
 
-                    if (distMoonSurf < 60f)
+                    if (!stage3Released && distMoonSurf < 420f + 85f)
                     {
-                        // Touch down and dock on the lunar surface.
-                        phase = FlightPhase.MoonLanding;
+                        stage3Released = true;
+                        ReleaseStage(stage3Root, flightDir, 1f, "Stage 3 (S-IVb final)");
+                        stage3Vel = flightDir * 0.8f;
+                        phase = FlightPhase.LMDeployment;
                         phaseElapsed = 0f;
-                        moonLanded = false;
                         SetBurn(false);
                     }
                     break;
                 }
 
-                case FlightPhase.MoonLanding:
+                case FlightPhase.LMDeployment:
                 {
-                    // Final descent to the surface, then dock upright.
-                    float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
-                    float brake = Mathf.Clamp01(1f - distMoonSurf / 60f);
-                    flightSpeed = Mathf.Lerp(.6f, .15f, brake * brake);
-                    AdvanceToward(ref pos, MoonCenter, flightSpeed, mv);
-
-                    // Nose points up (away from Moon center) once on the surface.
-                    Vector3 radial = (pos - MoonCenter).normalized;
-                    Quaternion want = Quaternion.FromToRotation(Vector3.up, radial);
-                    rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-3f * dt));
-
-                    if (distMoonSurf <= 3f && !moonLanded)
+                    // LM departs the final stage and descends to land.
+                    // Final stage continues orbiting; LM flies down.
+                    if (lmRoot != null && lmRoot.parent != null)
                     {
-                        pos = MoonCenter + radial * (MoonR + 3f);
-                        rocketRoot.position = pos;
-                        moonLanded = true;
+                        // Detach LM from the stack so it can move independently.
+                        lmRoot.SetParent(null, true);
+                        lmDeployed = true;
+                    }
+
+                    if (lmDeployed && lmRoot != null)
+                    {
+                        // LM descends toward the lunar surface.
+                        Vector3 moonRadial = (lmRoot.position - MoonCenter).normalized;
+                        lmVel += moonRadial * (-0.5f * dt);
+                        lmRoot.position += lmVel * dt;
+                        lmRoot.rotation = Quaternion.Slerp(lmRoot.rotation,
+                            Quaternion.FromToRotation(Vector3.up, moonRadial), 3f * dt);
+
+                        float distMoonSurf = Vector3.Distance(lmRoot.position, MoonCenter) - MoonR;
+                        if (distMoonSurf <= 3f && !lmLanded)
+                        {
+                            lmRoot.position = MoonCenter + moonRadial * (MoonR + 3f);
+                            lmLanded = true;
+                            lmLandingTime = Time.unscaledTime;
+                            SetBurn(false);
+                        }
+                    }
+
+                    // Final stage orbits at standoff distance.
+                    if (stage3Root != null)
+                    {
+                        if (stage3Root.parent != null) stage3Root.SetParent(null, true);
+                        Vector3 s3Radial = (stage3Root.position - MoonCenter).normalized;
+                        stage3Root.position += stage3Vel * dt;
+                        stage3Root.rotation = Quaternion.Slerp(stage3Root.rotation,
+                            Quaternion.FromToRotation(Vector3.up, s3Radial), 2f * dt);
+                    }
+
+                    if (lmLanded)
+                    {
                         phase = FlightPhase.MoonStay;
                         phaseElapsed = 0f;
                         MoonStayClock = 0f;
-                        SetBurn(false);
                     }
                     break;
                 }
 
                 case FlightPhase.MoonStay:
                 {
-                    // Rested on the lunar surface while the crew does science.
-                    if (!moonLanded)
+                    // LM rests on the lunar surface for about 10 seconds.
+                    if (lmRoot != null)
                     {
-                        // Should not happen, but snap down if it does.
-                        Vector3 radial = (pos - MoonCenter).normalized;
-                        pos = MoonCenter + radial * (MoonR + 3f);
-                        rocketRoot.position = pos;
-                        moonLanded = true;
+                        Vector3 moonRadial = (lmRoot.position - MoonCenter).normalized;
+                        lmRoot.position = MoonCenter + moonRadial * (MoonR + 3f);
                     }
+
                     MoonStayClock += dt;
 
-                    if (MoonStayClock >= MoonStayTotal)
+                    if (MoonStayClock >= 10f)
                     {
+                        // LM lifts off to dock with the orbiting final stage.
                         phase = FlightPhase.MoonLaunch;
                         phaseElapsed = 0f;
                         SetBurn(true);
+                        lmVel = Vector3.zero;
                     }
                     break;
                 }
 
                 case FlightPhase.MoonLaunch:
                 {
-                    // Lift off from the surface and climb back to lunar orbit.
-                    float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
-                    float climb = Mathf.Clamp01(distMoonSurf / 85f);
-                    flightSpeed = Mathf.Lerp(.15f, 2f, climb * climb);
-                    Vector3 radial = (pos - MoonCenter).normalized;
-                    pos += radial * (flightSpeed * mv);
-                    rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, Quaternion.FromToRotation(Vector3.up, radial), 1f - Mathf.Exp(-3f * dt));
+                    // LM ascends from the surface toward the orbiting final stage.
+                    if (lmRoot != null && stage3Root != null)
+                    {
+                        Vector3 toStage3 = (stage3Root.position - lmRoot.position).normalized;
+                        float dist = Vector3.Distance(lmRoot.position, stage3Root.position);
+                        lmVel += toStage3 * (2f * dt);
+                        lmRoot.position += lmVel * dt;
+                        lmRoot.rotation = Quaternion.Slerp(lmRoot.rotation,
+                            Quaternion.LookRotation(toStage3, Vector3.up), 3f * dt);
 
-                    if (distMoonSurf >= 85f)
+                        if (dist < 15f && !lmDocked)
+                        {
+                            lmDocked = true;
+                            lmRoot.position = stage3Root.position;
+                            lmRoot.rotation = stage3Root.rotation;
+                            // LM docks to final stage; command module comes home alone.
+                            phase = FlightPhase.Docking;
+                            phaseElapsed = 0f;
+                            SetBurn(false);
+                        }
+                    }
+
+                    // Final stage keeps orbiting.
+                    if (stage3Root != null)
+                    {
+                        if (stage3Root.parent != null) stage3Root.SetParent(null, true);
+                        Vector3 s3Radial = (stage3Root.position - MoonCenter).normalized;
+                        stage3Root.position += stage3Vel * dt;
+                        stage3Root.rotation = Quaternion.Slerp(stage3Root.rotation,
+                            Quaternion.FromToRotation(Vector3.up, s3Radial), 2f * dt);
+                    }
+                    break;
+                }
+
+                case FlightPhase.Docking:
+                {
+                    // Docked LM and final stage orbit briefly, then LM separates and
+                    // the command module begins the return to Earth.
+                    if (stage3Root != null)
+                    {
+                        Vector3 s3Radial = (stage3Root.position - MoonCenter).normalized;
+                        stage3Root.position += stage3Vel * dt;
+                        stage3Root.rotation = Quaternion.Slerp(stage3Root.rotation,
+                            Quaternion.FromToRotation(Vector3.up, s3Radial), 2f * dt);
+                    }
+
+                    if (phaseElapsed > 4f)
                     {
                         phase = FlightPhase.ReturnToEarth;
                         phaseElapsed = 0f;
                         flightSpeed = 2f;
-                        // Only the small command module returns - shed the lander mass.
-                        rocketRoot.localScale = Vector3.one * .35f;
+                        // rocketRoot is now just the command pod heading home.
                         SetBurn(true);
                     }
                     break;
@@ -1895,7 +2067,16 @@ namespace SpaceMissionDesign.UI
                 }
             }
 
-            rocketRoot.position = pos;
+            // Follow the active vehicle: rocketRoot during launch/transit/return,
+            // the LM during lunar operations, the final stage while docked.
+            Vector3 followPos = pos;
+            if (phase == FlightPhase.LMDeployment || phase == FlightPhase.MoonStay ||
+                phase == FlightPhase.MoonLaunch || phase == FlightPhase.Docking)
+            {
+                if (lmRoot != null) followPos = lmRoot.position;
+                else if (stage3Root != null) followPos = stage3Root.position;
+            }
+            rocketRoot.position = followPos;
 
             // Nose orientation: WASD pitches/yaws the vehicle directly (not the camera).
             // Moon landing/launch set their own attitude; everything else either follows
@@ -1953,6 +2134,19 @@ namespace SpaceMissionDesign.UI
             }
         }
 
+        /// <summary>
+        /// Unparents a staged piece from the rocket stack and gives it an initial push
+        /// away from the vehicle so it reads as a real stage separation.
+        /// </summary>
+        private void ReleaseStage(Transform stage, Vector3 awayDir, float pushSpeed, string name)
+        {
+            if (stage == null) return;
+            stage.SetParent(null, true);
+            stage.position += awayDir * pushSpeed;
+            stage.rotation = Quaternion.FromToRotation(Vector3.up, awayDir);
+            Debug.Log($"Mission3DView: {name} released and separating.");
+        }
+
         private void SetBurn(bool on)
         {
             if (flame != null) flame.gameObject.SetActive(on);
@@ -1967,8 +2161,8 @@ namespace SpaceMissionDesign.UI
         {
             bool spooling = phase == FlightPhase.Ignition;
             bool burning = spooling || phase == FlightPhase.Ascent || phase == FlightPhase.TransitToMoon ||
-                           phase == FlightPhase.MoonArrival || phase == FlightPhase.ReturnToEarth ||
-                           phase == FlightPhase.EarthArrival;
+                           phase == FlightPhase.FinalStageCommence || phase == FlightPhase.MoonLaunch ||
+                           phase == FlightPhase.ReturnToEarth || phase == FlightPhase.EarthArrival;
             if (flame != null && flame.gameObject.activeSelf != burning) SetBurn(burning);
 
             // Fire builds from a stub to full thrust while the engines spool up.
