@@ -22,28 +22,42 @@ namespace SpaceMissionDesign.UI
         private Vector3 flameBaseScale = Vector3.one;
         private Transform flame;
         private ParticleSystem exhaust;
-        private Vector3 focusHome = new Vector3(10f, 18f, 0f);
-        private Material white, metal, dark, gold, blue, grey, red, pad, flag, earthMat, moonMat, flameMat, exhaustMat, cloudMat;
+        private Vector3 focusHome = new Vector3(10f, PadTop + RocketHeight * .5f, 0f);
+        private Material white, metal, dark, gold, blue, grey, red, pad, flag, earthMat, moonMat, flameMat, exhaustMat, cloudMat, cirrusMat;
 
         // ---------------- world layout (all fixed; the rocket travels through it) ----------------
         private static readonly Vector3 EarthCenter = new Vector3(10f, -300f, 0f);
         private const float EarthR = 300f;        // surface at y = 0 under the pad
-        private const float CloudShellR = 322f;   // clouds pass by at ~22 units altitude
-        private const float AtmoFadeStart = 14f;  // sky starts losing blue
-        private const float AtmoFadeEnd = 150f;   // fully space-black here
+        private const float CloudShellR = 322f;   // low cloud deck
+        private const float CirrusShellR = 344f;  // high thin deck
         private static readonly Vector3 MoonCenter = new Vector3(10f, 260f, 2900f);
         private const float MoonR = 240f;
 
+        // Launch Complex 39A, Kennedy Space Center - the pad Apollo 11 left from
+        // (28.5729 N, 80.6490 W). The Earth texture is mapped so this exact point
+        // sits under the vehicle.
+        private const float SiteLatitude = 28.5729f;
+        private const float SiteLongitude = -80.6490f;
+
+        // A Saturn V (110 m) on a 300 unit planet would be 0.005 units tall, so the
+        // vehicle and its pad are exaggerated - but kept small enough that the planet
+        // reads as a planet. Model-space art is built at 28 units and scaled by this.
+        private const float RocketModelHeight = 28f;
+        private const float RocketHeight = 6f;
+        private const float VehicleScale = RocketHeight / RocketModelHeight;
+        private const float TableHeight = 3f;                      // model space
+        private const float PadTop = TableHeight * VehicleScale;    // world space
+
         private Transform earthSphere;
         private Transform cloudLayer;
+        private Transform cirrusLayer;
         private Transform moonSphere;
         private GameObject starfieldGO;
         private Material starMat;
         private Texture2D earthTex;
         private Texture2D cloudTex;
         private ParticleSystem padSmoke;
-        private const float PadHeight = 3f;                 // top of the launch table
-        private Vector3 rocketPadHome = new Vector3(10f, PadHeight, 0f);
+        private Vector3 rocketPadHome = new Vector3(10f, PadTop, 0f);
         private const float CountdownSeconds = 4f;
         private const float IgnitionSeconds = 2.2f;
 
@@ -53,8 +67,8 @@ namespace SpaceMissionDesign.UI
         private Vector3 flightDir = Vector3.up;
         private float flightSpeed;
 
-        private Color surfaceSky = new Color(.45f, .68f, .92f);
-        private Color spaceSky = new Color(.012f, .014f, .025f);
+        private static readonly Color surfaceSky = new Color(.45f, .68f, .92f);
+        private static readonly Color spaceSky = new Color(.012f, .014f, .025f);
 
         private const float EngineH = 3.5f;
         private const float Stage1H = 14.4f;
@@ -113,7 +127,7 @@ namespace SpaceMissionDesign.UI
             get
             {
                 if (rocketRoot == null) return 0f;
-                return Mathf.Max(0f, (rocketRoot.position - EarthCenter).magnitude - EarthR - PadHeight);
+                return Mathf.Max(0f, (rocketRoot.position - EarthCenter).magnitude - EarthR - PadTop);
             }
         }
 
@@ -190,12 +204,14 @@ namespace SpaceMissionDesign.UI
 
             earthMat = Mat("Earth", earthTex ?? TextureGenerator.Earth(), tint: Color.white, .02f, .2f, new Color(.01f, .04f, .09f));
             cloudMat = Mat("Clouds", cloudTex, tint: Color.white, 0f, .1f, null);
-            if (cloudMat.HasProperty("_Mode")) cloudMat.SetFloat("_Mode", 3f);
-            if (cloudMat.HasProperty("_SrcBlend")) cloudMat.SetFloat("_SrcBlend", 1f);
-            if (cloudMat.HasProperty("_DstBlend")) cloudMat.SetFloat("_DstBlend", 10f);
-            if (cloudMat.HasProperty("_ZWrite")) cloudMat.SetFloat("_ZWrite", 0f);
-            if (cloudMat.HasProperty("_Cull")) cloudMat.SetFloat("_Cull", 0f); // visible from inside too
-            cloudMat.renderQueue = 3000;
+            SetTransparent(cloudMat, new Color(1f, 1f, 1f, .55f), 3000);
+
+            // High, thin deck: the same cloud field tiled twice so it reads as a separate
+            // layer instead of a copy of the deck below.
+            var cirrusTex = cloudTex != null ? cloudTex : TextureGenerator.Clouds();
+            cirrusMat = Mat("Cirrus", cirrusTex, tint: new Color(.93f, .96f, 1f), 0f, .1f, null);
+            cirrusMat.mainTextureScale = new Vector2(1.9f, 1f);
+            SetTransparent(cirrusMat, new Color(.93f, .96f, 1f, .22f), 3001);
 
             moonMat = Mat("Moon", TextureGenerator.Moon(), tint: Color.white, .02f, .15f);
 
@@ -203,6 +219,11 @@ namespace SpaceMissionDesign.UI
             exhaustMat = Mat("Exhaust", TextureGenerator.SoftDot(), tint: new Color(1f, .7f, .3f), 0f, .05f);
         }
 
+        /// <summary>
+        /// Turns the second Earth map into a cloud coverage texture. Clouds are bright and
+        /// colourless, so luminance gates them and saturation removes coloured land: that
+        /// works whether the source is a cloud-only map or a second full-colour globe.
+        /// </summary>
         private static Texture2D MakeCloudsFromMap(Texture2D source)
         {
             var tex = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Repeat };
@@ -210,9 +231,16 @@ namespace SpaceMissionDesign.UI
             var dst = new Color32[src.Length];
             for (int i = 0; i < src.Length; i++)
             {
-                float bright = (src[i].r + src[i].g + src[i].b) / 3f;
-                float alpha = Mathf.Clamp01((bright - .35f) * 2.2f);
-                dst[i] = new Color32(255, 255, 255, (byte)(alpha * 255f));
+                float r = src[i].r / 255f, g = src[i].g / 255f, b = src[i].b / 255f;
+                float lum = (r + g + b) / 3f;
+                float maxc = Mathf.Max(r, Mathf.Max(g, b));
+                float minc = Mathf.Min(r, Mathf.Min(g, b));
+                float sat = maxc > 1e-3f ? (maxc - minc) / maxc : 0f;
+
+                float bright = Mathf.Clamp01((lum - .42f) / .40f);   // only bright pixels are cloud
+                float neutral = Mathf.Clamp01(1f - sat * 2.5f);      // coloured land is not cloud
+                float coverage = bright * neutral;
+                dst[i] = new Color32(255, 255, 255, (byte)(coverage * 255f));
             }
             tex.SetPixels32(dst);
             tex.Apply();
@@ -235,16 +263,12 @@ namespace SpaceMissionDesign.UI
 
             // Earth: fixed planet whose surface sits at y = 0 under the launch pad.
             // The rocket physically climbs away from it - the horizon curvature,
-            // shrinking planet and thinning sky all come from real geometry.
-            earthSphere = Sphere("Earth", EarthCenter, EarthR * 2f, earthMat, null).transform;
-            // Rotate the planet so the launch site is not sitting on the sphere's UV pole.
-            // At the pole every texture column converges to one point, which smears the
-            // ground into radial streaks.
-            earthSphere.rotation = Quaternion.Euler(0f, 0f, 90f);
+            // shrinking planet and thinning sky all come from real geometry. The mesh
+            // is UV-mapped so the point under the pad is LC-39A on the real Earth map.
+            earthSphere = Planet("Earth", EarthCenter, EarthR, earthMat).transform;
 
-            // Cloud shell hugging the surface - the rocket flies straight through it.
-            cloudLayer = Sphere("Cloud layer", EarthCenter, CloudShellR * 2f, cloudMat, null).transform;
-            cloudLayer.rotation = earthSphere.rotation;
+            // Cloud decks the vehicle punches through on the way up.
+            cloudLayer = Planet("Low cloud deck", EarthCenter, CloudShellR, cloudMat).transform;
             if (cloudLayer.TryGetComponent<MeshRenderer>(out var cr) && cr.material != null)
             {
                 var c = cr.material.color;
@@ -252,6 +276,15 @@ namespace SpaceMissionDesign.UI
                 cr.material.color = c;
             }
 
+            cirrusLayer = Planet("High cirrus deck", EarthCenter, CirrusShellR, cirrusMat).transform;
+            if (cirrusLayer.TryGetComponent<MeshRenderer>(out var cir) && cir.material != null)
+            {
+                var c = cir.material.color;
+                c.a = .22f;
+                cir.material.color = c;
+            }
+
+            BuildAtmosphere();
             BuildLaunchComplex();
 
             // Moon: fixed far ahead along the flight path.
@@ -263,27 +296,191 @@ namespace SpaceMissionDesign.UI
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.Linear;
             RenderSettings.fogColor = surfaceSky;
-            RenderSettings.fogStartDistance = 260f;
-            RenderSettings.fogEndDistance = 2400f;
+            RenderSettings.fogStartDistance = 30f;
+            RenderSettings.fogEndDistance = 170f;
 
             BuildStars();
 
             if (Camera.main != null) Camera.main.backgroundColor = surfaceSky;
         }
 
+        // ---------------- planet geometry ----------------
+
         /// <summary>
-        /// Apollo launch complex: concrete apron, pad deck, flame trench, hold-down
-        /// clamps and the red service tower with umbilical arms.
+        /// Creates a sphere whose equirectangular UVs put (lat, lon) at its local +Y -
+        /// the point the launch pad stands on. Unity's primitive sphere has an unknown
+        /// UV convention, so the mesh is generated here where the mapping is explicit.
+        /// </summary>
+        private GameObject Planet(string name, Vector3 center, float radius, Material mat)
+        {
+            var go = new GameObject(name);
+            go.transform.position = center;
+            DontDestroyOnLoad(go);
+            var mf = go.AddComponent<MeshFilter>();
+            var mr = go.AddComponent<MeshRenderer>();
+            mf.sharedMesh = GlobeMesh(radius, 96, 64, SiteLatitude, SiteLongitude);
+            mr.sharedMaterial = mat;
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+            return go;
+        }
+
+        private static Mesh GlobeMesh(float radius, int lonSeg, int latSeg, float siteLat, float siteLon)
+        {
+            float lat0 = siteLat * Mathf.Deg2Rad;
+
+            // Geographic frame with the site at +Y. North is +X and east is +Z, so the
+            // vehicle looks out over the Atlantic along the flight path to the Moon.
+            Vector3 site = Vector3.up;
+            Vector3 pole = (site * Mathf.Sin(lat0) + Vector3.right * Mathf.Cos(lat0)).normalized;
+            Vector3 meridian = (site - pole * Mathf.Sin(lat0)).normalized;  // toward the equator
+            Vector3 east = Vector3.forward;
+
+            var verts = new List<Vector3>((lonSeg + 1) * (latSeg + 1));
+            var uvs = new List<Vector2>(verts.Capacity);
+            var normals = new List<Vector3>(verts.Capacity);
+            var tris = new List<int>(lonSeg * latSeg * 6);
+
+            // The texture wraps at the antimeridian; keep that seam 180 degrees away from
+            // the pad (over the Pacific) and duplicate the column so nothing smears.
+            float seam = -180f - siteLon;
+
+            for (int y = 0; y <= latSeg; y++)
+            {
+                float v = y / (float)latSeg;
+                float lat = (v - .5f) * Mathf.PI;
+                float cl = Mathf.Cos(lat), sl = Mathf.Sin(lat);
+                for (int x = 0; x <= lonSeg; x++)
+                {
+                    float u = x / (float)lonSeg;
+                    float d = (seam + 360f * u) * Mathf.Deg2Rad;
+                    Vector3 ring = meridian * Mathf.Cos(d) + east * Mathf.Sin(d);
+                    var dir = (pole * sl + ring * cl).normalized;
+                    verts.Add(dir * radius);
+                    normals.Add(dir);
+                    uvs.Add(new Vector2(u, v));
+                }
+            }
+
+            for (int y = 0; y < latSeg; y++)
+            {
+                for (int x = 0; x < lonSeg; x++)
+                {
+                    int a = y * (lonSeg + 1) + x;
+                    int b = a + 1;
+                    int c = a + lonSeg + 1;
+                    int d = c + 1;
+                    tris.Add(a); tris.Add(b); tris.Add(c);
+                    tris.Add(b); tris.Add(d); tris.Add(c);
+                }
+            }
+
+            var mesh = new Mesh { name = "Globe", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            mesh.SetVertices(verts);
+            mesh.SetNormals(normals);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateBounds();
+
+            // Match the winding of a built-in sphere so the planet is never inside-out,
+            // whatever the renderer's front-face convention is.
+            if (Mathf.Sign(SignedVolume(mesh)) != ReferenceWinding())
+            {
+                for (int i = 0; i < tris.Count; i += 3)
+                {
+                    int t = tris[i];
+                    tris[i] = tris[i + 1];
+                    tris[i + 1] = t;
+                }
+                mesh.SetTriangles(tris, 0);
+            }
+            return mesh;
+        }
+
+        private static float SignedVolume(Mesh mesh)
+        {
+            var v = mesh.vertices;
+            var t = mesh.triangles;
+            float sum = 0f;
+            for (int i = 0; i + 2 < t.Length; i += 3)
+                sum += Vector3.Dot(v[t[i]], Vector3.Cross(v[t[i + 1]], v[t[i + 2]]));
+            return sum;
+        }
+
+        private static float referenceWinding;
+
+        private static float ReferenceWinding()
+        {
+            if (Mathf.Abs(referenceWinding) > 1e-6f) return referenceWinding;
+            var probe = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            probe.SetActive(false);
+            var mesh = probe.GetComponent<MeshFilter>().sharedMesh;
+            referenceWinding = mesh != null ? Mathf.Sign(SignedVolume(mesh)) : 1f;
+            Destroy(probe);
+            return referenceWinding;
+        }
+
+        /// <summary>
+        /// Haze shells stacked above the surface. From the pad the camera sits inside all
+        /// of them and they tint the sky; climbing out, each one peels away in turn and
+        /// the outer shells leave a blue rim around the planet seen from space.
+        /// </summary>
+        private void BuildAtmosphere()
+        {
+            AddShell("Atmosphere - troposphere", EarthR + 2.5f, new Color(.70f, .84f, 1f, .10f), 2990);
+            AddShell("Atmosphere - stratosphere", EarthR + 30f, new Color(.46f, .68f, 1f, .075f), 2991);
+            AddShell("Atmosphere - exosphere", EarthR + 78f, new Color(.30f, .50f, .95f, .055f), 2992);
+        }
+
+        private void AddShell(string name, float radius, Color tint, int queue)
+        {
+            // Unlit so the haze keeps a constant tint no matter which way the sun faces,
+            // and so nothing is shaded across the inside of the shell.
+            Shader s = Shader.Find("Unlit/Transparent");
+            if (s == null) s = Shader.Find("Sprites/Default");
+            if (s == null) s = Shader.Find("Standard");
+            var mat = new Material(s) { name = name };
+            SetTransparent(mat, tint, queue);
+            Planet(name, EarthCenter, radius, mat);
+        }
+
+        private static void SetTransparent(Material m, Color tint, int queue)
+        {
+            m.SetOverrideTag("RenderType", "Transparent");
+            if (m.HasProperty("_Mode")) m.SetFloat("_Mode", 3f);
+            if (m.HasProperty("_SrcBlend")) m.SetFloat("_SrcBlend", 1f);
+            if (m.HasProperty("_DstBlend")) m.SetFloat("_DstBlend", 10f);
+            if (m.HasProperty("_ZWrite")) m.SetFloat("_ZWrite", 0f);
+            if (m.HasProperty("_Cull")) m.SetFloat("_Cull", 0f);
+            if (m.HasProperty("_Glossiness")) m.SetFloat("_Glossiness", 0f);
+            if (m.HasProperty("_Metallic")) m.SetFloat("_Metallic", 0f);
+            if (m.HasProperty("_Color")) m.SetColor("_Color", tint);
+            if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", tint);
+            if (m.HasProperty("_EmissionColor"))
+            {
+                m.EnableKeyword("_EMISSION");
+                m.SetColor("_EmissionColor", new Color(tint.r, tint.g, tint.b) * .25f);
+            }
+            m.DisableKeyword("_ALPHATEST_ON");
+            m.EnableKeyword("_ALPHABLEND_ON");
+            m.renderQueue = queue;
+        }
+
+        /// <summary>
+        /// Apollo launch complex built in model space (28-unit vehicle) and scaled down as
+        /// one object, so pad and vehicle stay in proportion at any vehicle scale.
         /// </summary>
         private void BuildLaunchComplex()
         {
             var complex = new GameObject("Launch Complex").transform;
+            complex.position = new Vector3(10f, 0f, 0f);
+            complex.localScale = Vector3.one * VehicleScale;
             DontDestroyOnLoad(complex.gameObject);
 
             // Flat concrete apron + pad deck at ground level (top exactly at y = 0).
-            Cube("Concrete apron", new Vector3(10f, -.4f, 0f), new Vector3(36f, .8f, 36f), pad, complex);
-            Cylinder("Pad deck", new Vector3(10f, -.22f, 0f), 13f, .45f, grey, complex);
-            Cube("Flame trench", new Vector3(10f, -.28f, 0f), new Vector3(21f, .55f, 4.6f), dark, complex);
+            Cube("Concrete apron", new Vector3(0f, -.4f, 0f), new Vector3(36f, .8f, 36f), pad, complex);
+            Cylinder("Pad deck", new Vector3(0f, -.22f, 0f), 13f, .45f, grey, complex);
+            Cube("Flame trench", new Vector3(0f, -.28f, 0f), new Vector3(21f, .55f, 4.6f), dark, complex);
 
             // Raised launch table: the vehicle stands on this ring, so the engines vent
             // down through the open centre and the flame stays visible above the ground
@@ -291,29 +488,29 @@ namespace SpaceMissionDesign.UI
             for (int i = 0; i < 8; i++)
             {
                 float a = i * 45f * Mathf.Deg2Rad;
-                var p = new Vector3(10f + Mathf.Cos(a) * 3.4f, PadHeight - .3f, Mathf.Sin(a) * 3.4f);
+                var p = new Vector3(Mathf.Cos(a) * 3.4f, TableHeight - .3f, Mathf.Sin(a) * 3.4f);
                 var seg = Cube("Launch table", p, new Vector3(3.1f, .6f, 1.4f), metal, complex);
                 seg.transform.localRotation = Quaternion.Euler(0f, -i * 45f, 0f);
             }
             for (int i = 0; i < 4; i++)
             {
                 float a = (i * 90f + 45f) * Mathf.Deg2Rad;
-                var p = new Vector3(10f + Mathf.Cos(a) * 3.65f, PadHeight * .5f, Mathf.Sin(a) * 3.65f);
-                Cube("Table leg", p, new Vector3(.9f, PadHeight, .9f), dark, complex);
+                var p = new Vector3(Mathf.Cos(a) * 3.65f, TableHeight * .5f, Mathf.Sin(a) * 3.65f);
+                Cube("Table leg", p, new Vector3(.9f, TableHeight, .9f), dark, complex);
             }
 
             // Hold-down clamps gripping the base of the vehicle.
             for (int i = 0; i < 4; i++)
             {
                 float ang = (i * 90f + 45f) * Mathf.Deg2Rad;
-                var p = new Vector3(10f + Mathf.Cos(ang) * 3.5f, PadHeight + .65f, Mathf.Sin(ang) * 3.5f);
+                var p = new Vector3(Mathf.Cos(ang) * 3.5f, TableHeight + .65f, Mathf.Sin(ang) * 3.5f);
                 Cube("Hold-down clamp", p, new Vector3(1.5f, 1.3f, 1.5f), metal, complex);
             }
 
             // Service tower beside the rocket.
             var tower = new GameObject("Service Tower").transform;
             tower.SetParent(complex, false);
-            const float bx = 19.5f, bz = 0f, half = 2.3f, height = 44f;
+            const float bx = 9.5f, bz = 0f, half = 2.3f, height = 44f;
 
             var corners = new[]
             {
@@ -339,22 +536,24 @@ namespace SpaceMissionDesign.UI
             Cube("Umbilical arm", new Vector3(bx - half - 2.6f, 22f, bz), new Vector3(6f, .55f, 1f), grey, tower);
             Cube("Umbilical arm", new Vector3(bx - half - 2.6f, 11f, bz), new Vector3(6f, .55f, 1f), grey, tower);
 
-            // Support buildings on the apron (sunk slightly so the curved ground does not
-            // leave them floating at the edges of the pad).
-            Cube("Blockhouse", new Vector3(-9f, 1.4f, 11f), new Vector3(9f, 3.4f, 7f), grey, complex);
-            Cube("Water tower", new Vector3(31f, 6.1f, -9f), new Vector3(2.4f, 14f, 2.4f), metal, complex);
+            // Support buildings on the apron (kept inside the concrete edge so they do
+            // not hang off the curved ground).
+            Cube("Blockhouse", new Vector3(-13.5f, 1.4f, 10f), new Vector3(9f, 3.4f, 7f), grey, complex);
+            Cube("Water tower", new Vector3(14.5f, 6.1f, -9f), new Vector3(2.4f, 14f, 2.4f), metal, complex);
         }
 
         /// <summary>Ground smoke that billows out of the flame trench at ignition.</summary>
         private void BuildPadSmoke()
         {
+            // Sized in world units to match the shrunken pad (VehicleScale).
+            const float s = VehicleScale;
             var go = new GameObject("Pad Smoke");
-            go.transform.position = new Vector3(10f, 1.2f, 0f);
+            go.transform.position = new Vector3(10f, .3f, 0f);
             var ps = go.AddComponent<ParticleSystem>();
             var main = ps.main;
             main.startLifetime = new ParticleSystem.MinMaxCurve(3f, 6f);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(3f, 8f);
-            main.startSize = new ParticleSystem.MinMaxCurve(5f, 13f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(3f * s, 8f * s);
+            main.startSize = new ParticleSystem.MinMaxCurve(5f * s, 13f * s);
             main.startColor = new ParticleSystem.MinMaxGradient(
                 new Color(.92f, .92f, .94f, .30f), new Color(.75f, .74f, .73f, .14f));
             main.simulationSpace = ParticleSystemSimulationSpace.World;
@@ -367,7 +566,7 @@ namespace SpaceMissionDesign.UI
 
             var shape = ps.shape;
             shape.shapeType = ParticleSystemShapeType.Circle;
-            shape.radius = 7f;
+            shape.radius = 7f * s;
             shape.rotation = new Vector3(-90f, 0f, 0f); // emit upward, then spread outward
 
             // Radial velocity turns the rising column into the ground-hugging cloud
@@ -375,7 +574,7 @@ namespace SpaceMissionDesign.UI
             var vel = ps.velocityOverLifetime;
             vel.enabled = true;
             vel.space = ParticleSystemSimulationSpace.Local;
-            vel.radial = new ParticleSystem.MinMaxCurve(7f, 17f);
+            vel.radial = new ParticleSystem.MinMaxCurve(7f * s, 17f * s);
 
             Shader psShader = Shader.Find("Particles/Standard Unlit");
             if (psShader == null) psShader = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
@@ -463,13 +662,14 @@ namespace SpaceMissionDesign.UI
             var orbit = cam.GetComponent<OrbitCamera>();
             if (orbit == null) orbit = cam.gameObject.AddComponent<OrbitCamera>();
             orbit.target = focus;
-            orbit.minDistance = 16f;
-            orbit.maxDistance = 900f;
-            orbit.homeDistance = 40f;
-            orbit.distance = 30f;
-            orbit.targetDistance = 30f;
-            orbit.pitch = -22f;
+            orbit.minDistance = 7f;
+            orbit.maxDistance = 500f;
+            orbit.homeDistance = 18f;
+            orbit.distance = 18f;
+            orbit.targetDistance = 18f;
+            orbit.pitch = -8f;
             orbit.yaw = 0f;
+            orbit.maxPanDistance = 24f;
             cameraRig = orbit;
 
             orbit.enabled = false;
@@ -634,29 +834,39 @@ namespace SpaceMissionDesign.UI
             if (rocketRoot != null) Destroy(rocketRoot.gameObject);
             ResetFlightState();
 
+            // rocketRoot lives in world space and is what the flight state machine moves.
+            // All artwork is authored at RocketModelHeight (28 units) and built under a
+            // "visual" child scaled by VehicleScale, so the whole stack - model, plume
+            // and vapour trail - shrinks to RocketHeight without touching the flight code.
             var root = new GameObject("Rocket").transform;
             root.position = rocketPadHome;
             root.rotation = Quaternion.identity;
             rocketRoot = root;
 
-            var saturnV = PlaceSaturnVFbx(root, new Vector3(0, 0, 0), 28f);
+            var visual = new GameObject("Vehicle").transform;
+            visual.SetParent(root, false);
+            visual.localPosition = Vector3.zero;
+            visual.localRotation = Quaternion.identity;
+            visual.localScale = Vector3.one * VehicleScale;
+
+            var saturnV = PlaceSaturnVFbx(visual, Vector3.zero, RocketModelHeight);
 
             if (saturnV == null)
             {
-                Cylinder("Stage 1", new Vector3(0, Stage1Base + Stage1H * .5f, 0), Stage1D * .5f, Stage1H, white, root);
-                Cylinder("Stage 2", new Vector3(0, Stage2Base + Stage2H * .5f, 0), Stage2D * .5f, Stage2H, metal, root);
-                Cylinder("Service module", new Vector3(0, ServiceBase + ServiceH * .5f, 0), ServiceD * .5f, ServiceH, metal, root);
-                Sphere("Command module", new Vector3(0, CapsuleBase + CapsuleH * .45f, 0), CapsuleD, white, root);
-                Cylinder("Escape tower", new Vector3(0, StackTop + .6f, 0), .11f, 1.2f, dark, root);
-                Sphere("Tower tip", new Vector3(0, StackTop + 1.25f, 0), .24f, dark, root);
+                Cylinder("Stage 1", new Vector3(0, Stage1Base + Stage1H * .5f, 0), Stage1D * .5f, Stage1H, white, visual);
+                Cylinder("Stage 2", new Vector3(0, Stage2Base + Stage2H * .5f, 0), Stage2D * .5f, Stage2H, metal, visual);
+                Cylinder("Service module", new Vector3(0, ServiceBase + ServiceH * .5f, 0), ServiceD * .5f, ServiceH, metal, visual);
+                Sphere("Command module", new Vector3(0, CapsuleBase + CapsuleH * .45f, 0), CapsuleD, white, visual);
+                Cylinder("Escape tower", new Vector3(0, StackTop + .6f, 0), .11f, 1.2f, dark, visual);
+                Sphere("Tower tip", new Vector3(0, StackTop + 1.25f, 0), .24f, dark, visual);
             }
 
-            var flameGO = Cylinder("Engine flame", new Vector3(0, -3.4f, 0), 1.2f, 6f, flameMat, root);
+            var flameGO = Cylinder("Engine flame", new Vector3(0, -3.4f, 0), 1.2f, 6f, flameMat, visual);
             flame = flameGO.transform;
             flameBaseScale = flame.localScale;
             flame.gameObject.SetActive(false);
 
-            BuildExhaust(root, -3.4f);
+            BuildExhaust(visual, -3.4f);
 
             if (focus != null) focus.position = focusHome;
             if (cameraRig != null) cameraRig.ClearPan();
@@ -681,6 +891,11 @@ namespace SpaceMissionDesign.UI
             if (cameraRig != null) cameraRig.shake = 0f;
         }
 
+        /// <summary>
+        /// Vapour/exhaust trail under the engines. Particles are simulated in world space
+        /// (so the plume falls behind the climbing vehicle) and sized in world units, i.e.
+        /// already scaled for the shrunken vehicle.
+        /// </summary>
         private void BuildExhaust(Transform root, float y)
         {
             var go = new GameObject("Exhaust");
@@ -688,9 +903,9 @@ namespace SpaceMissionDesign.UI
             go.transform.localPosition = new Vector3(0f, y, 0f);
             var ps = go.AddComponent<ParticleSystem>();
             var main = ps.main;
-            main.startLifetime = new ParticleSystem.MinMaxCurve(.55f, .95f);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(10f, 19f);
-            main.startSize = new ParticleSystem.MinMaxCurve(.8f, 2.4f);
+            main.startLifetime = new ParticleSystem.MinMaxCurve(.5f, .95f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(3.2f, 7f);
+            main.startSize = new ParticleSystem.MinMaxCurve(.22f, .62f);
             main.startColor = new ParticleSystem.MinMaxGradient(new Color(1f, .78f, .32f, .95f), new Color(1f, .38f, .06f, .45f));
             main.simulationSpace = ParticleSystemSimulationSpace.World;
             main.maxParticles = 900;
@@ -733,9 +948,9 @@ namespace SpaceMissionDesign.UI
             if (cameraRig != null)
             {
                 cameraRig.userControlled = false;
-                cameraRig.cinematicPitch = 6f;
+                cameraRig.cinematicPitch = 4f;
                 cameraRig.cinematicYaw = 55f;
-                cameraRig.cinematicDistance = 42f;
+                cameraRig.cinematicDistance = 20f;
             }
 
             phase = FlightPhase.Countdown;
@@ -777,7 +992,7 @@ namespace SpaceMissionDesign.UI
             // vehicle drift right out of frame.
             Vector3 focusTarget = phase == FlightPhase.PreLaunch
                 ? focusHome
-                : rocketRoot.position + Vector3.up * 15f;
+                : rocketRoot.position + Vector3.up * (RocketHeight * .5f);
             float k = 1f - Mathf.Exp(-18f * Time.deltaTime);
             focus.position = Vector3.Lerp(focus.position, focusTarget, k);
 
@@ -789,35 +1004,45 @@ namespace SpaceMissionDesign.UI
             // --- environment driven by real altitude ---
             float alt = AltitudeUnits;
 
-            // Sky fades from blue to space-black as the atmosphere thins.
-            float skyT = Mathf.Clamp01((alt - AtmoFadeStart) / (AtmoFadeEnd - AtmoFadeStart));
-            if (Camera.main != null)
-                Camera.main.backgroundColor = Color.Lerp(surfaceSky, spaceSky, skyT);
+            // The sky is a multi-stop altitude gradient, not a single blue->black fade:
+            // ground haze thickens it, the troposphere is deep blue, the stratosphere goes
+            // navy and the last shell peels off into black. The stops are placed where the
+            // haze shells sit, so the sky thins exactly as the vehicle leaves them.
+            float skyT = Mathf.Clamp01(alt / 170f);
+            Color sky = SkyColorAt(alt);
+            if (Camera.main != null) Camera.main.backgroundColor = sky;
 
-            // Stars fade in with altitude.
+            // Stars fade in once the sky is dark enough for them to show.
             if (starMat != null && starMat.HasProperty("_Color"))
             {
                 Color c = starMat.color;
-                c.a = Mathf.Clamp01((alt - 70f) / 110f);
+                c.a = Mathf.Clamp01((alt - 55f) / 95f);
                 starMat.color = c;
             }
 
-            // Cloud alpha: thicken through the shell, gone once clear of the atmosphere.
-            if (cloudLayer.TryGetComponent<MeshRenderer>(out var cloudRend) && cloudRend.material != null)
+            // Each cloud deck thins as the vehicle climbs through and above it.
+            if (cloudLayer != null && cloudLayer.TryGetComponent<MeshRenderer>(out var cloudRend) && cloudRend.material != null)
             {
                 Color c = cloudRend.material.color;
-                c.a = .55f * (1f - Mathf.Clamp01((alt - 40f) / 90f));
+                c.a = .55f * (1f - Mathf.Clamp01((alt - 12f) / 22f));
                 cloudRend.material.color = c;
+            }
+            if (cirrusLayer != null && cirrusLayer.TryGetComponent<MeshRenderer>(out var cirRend) && cirRend.material != null)
+            {
+                Color c = cirRend.material.color;
+                c.a = .22f * (1f - Mathf.Clamp01((alt - 34f) / 26f));
+                cirRend.material.color = c;
             }
 
             UpdateEngineVisuals();
 
-            // Distance haze follows the sky, so the ground stops looking hazy in orbit.
+            // Ground haze follows the sky colour and opens up as the air thins, so the
+            // pad looks properly hazy from the ground and crisp from altitude.
             if (RenderSettings.fog)
             {
-                RenderSettings.fogColor = Color.Lerp(surfaceSky, spaceSky, skyT);
-                RenderSettings.fogStartDistance = Mathf.Lerp(260f, 4200f, skyT);
-                RenderSettings.fogEndDistance = Mathf.Lerp(2400f, 8000f, skyT);
+                RenderSettings.fogColor = sky;
+                RenderSettings.fogStartDistance = Mathf.Lerp(22f, 900f, skyT);
+                RenderSettings.fogEndDistance = Mathf.Lerp(165f, 5200f, skyT);
             }
 
             // Launch vibration: strongest at ignition, fading as the vehicle clears the pad.
@@ -825,11 +1050,32 @@ namespace SpaceMissionDesign.UI
             {
                 float shake = 0f;
                 if (phase == FlightPhase.Ignition)
-                    shake = .13f * Mathf.Clamp01(phaseElapsed / IgnitionSeconds);
+                    shake = .07f * Mathf.Clamp01(phaseElapsed / IgnitionSeconds);
                 else if (phase == FlightPhase.Ascent)
-                    shake = .13f * Mathf.Clamp01(1f - alt / 60f);
+                    shake = .07f * Mathf.Clamp01(1f - alt / 40f);
                 cameraRig.shake = Mathf.Max(shake, cameraRig.shake);
             }
+        }
+
+        /// <summary>
+        /// Sky colour for an altitude above the launch site. Stops are chosen to match the
+        /// atmosphere shells: blue haze at the surface, deep blue in the troposphere, navy
+        /// through the stratosphere, then black.
+        /// </summary>
+        private static Color SkyColorAt(float alt)
+        {
+            Color haze = new Color(.63f, .79f, .95f);
+            Color low = new Color(.40f, .62f, .92f);
+            Color mid = new Color(.16f, .34f, .74f);
+            Color high = new Color(.05f, .12f, .34f);
+            Color edge = new Color(.015f, .025f, .075f);
+
+            if (alt <= 0f) return haze;
+            if (alt < 9f) return Color.Lerp(haze, low, alt / 9f);
+            if (alt < 30f) return Color.Lerp(low, mid, (alt - 9f) / 21f);
+            if (alt < 70f) return Color.Lerp(mid, high, (alt - 30f) / 40f);
+            if (alt < 150f) return Color.Lerp(high, edge, (alt - 70f) / 80f);
+            return Color.Lerp(edge, spaceSky, Mathf.Clamp01((alt - 150f) / 120f));
         }
 
         private void StepFlight()
@@ -838,7 +1084,7 @@ namespace SpaceMissionDesign.UI
             float dt = Time.deltaTime;
             Vector3 toMoon = (MoonCenter - EarthCenter).normalized;
             Vector3 upNow = (pos - EarthCenter).normalized;
-            float alt = (pos - EarthCenter).magnitude - EarthR - PadHeight;
+            float alt = (pos - EarthCenter).magnitude - EarthR - PadTop;
 
             switch (phase)
             {
@@ -862,13 +1108,13 @@ namespace SpaceMissionDesign.UI
                     float t = Mathf.Clamp01(phaseElapsed / IgnitionSeconds);
 
                     // The stack shivers against the hold-down clamps as thrust builds.
-                    float strainX = Mathf.Sin(Time.time * 61f) * .034f * t;
-                    float strainZ = Mathf.Cos(Time.time * 47f) * .024f * t;
+                    float strainX = Mathf.Sin(Time.time * 61f) * .045f * t;
+                    float strainZ = Mathf.Cos(Time.time * 47f) * .032f * t;
 
                     // Clamps release at ~55% of spool-up; the vehicle then eases upward
-                    // a couple of metres before the Ascent phase takes over.
+                    // before the Ascent phase takes over - a liftoff, not a jump.
                     float rise = Mathf.Clamp01((t - .55f) / .45f);
-                    rise = rise * rise * 2.4f;
+                    rise = rise * rise * 1.2f;
 
                     pos = rocketPadHome + new Vector3(strainX, rise, strainZ);
                     flightDir = Vector3.up;
@@ -890,10 +1136,10 @@ namespace SpaceMissionDesign.UI
                     // between turnStartAlt and turnFullAlt (classic gravity turn).
                     // Thrust builds over the first seconds, so the vehicle starts slowly
                     // and only then gains real speed - a liftoff, not a teleport.
-                    const float turnStartAlt = 70f, turnFullAlt = 260f;
+                    const float turnStartAlt = 40f, turnFullAlt = 220f;
                     float climb = Mathf.Clamp01(alt / turnFullAlt);
-                    float speedCap = Mathf.Lerp(26f, 168f, climb * climb);
-                    flightSpeed = Mathf.Min(flightSpeed + 11.5f * dt, speedCap);
+                    float speedCap = Mathf.Lerp(10f, 95f, climb * climb);
+                    flightSpeed = Mathf.Min(flightSpeed + 6.5f * dt, speedCap);
 
                     float turn = Mathf.Clamp01((alt - turnStartAlt) / (turnFullAlt - turnStartAlt));
                     flightDir = Vector3.Slerp(Vector3.up, toMoon, turn).normalized;
@@ -987,7 +1233,7 @@ namespace SpaceMissionDesign.UI
 
                 case FlightPhase.EarthArrival:
                 {
-                    float altHome = (pos - EarthCenter).magnitude - EarthR - PadHeight;
+                    float altHome = (pos - EarthCenter).magnitude - EarthR - PadTop;
                     flightSpeed = Mathf.Max(flightSpeed - 90f * dt, 10f);
                     Vector3 descend = (EarthCenter - pos).normalized;
                     pos += descend * (flightSpeed * dt);
@@ -996,7 +1242,7 @@ namespace SpaceMissionDesign.UI
                     {
                         // Touch down on the launch table.
                         Vector3 radial = (pos - EarthCenter).normalized;
-                        pos = EarthCenter + radial * (EarthR + PadHeight + .01f);
+                        pos = EarthCenter + radial * (EarthR + PadTop + .01f);
                         pos.x = 10f; pos.z = 0f;
                         rocketRoot.position = pos;
                         rocketRoot.rotation = Quaternion.LookRotation(Vector3.forward, radial);
@@ -1063,7 +1309,7 @@ namespace SpaceMissionDesign.UI
             // vehicle climbs away.
             if (padSmoke != null)
             {
-                bool billowing = spooling || (phase == FlightPhase.Ascent && AltitudeUnits < 55f);
+                bool billowing = spooling || (phase == FlightPhase.Ascent && AltitudeUnits < 28f);
                 var pem = padSmoke.emission;
                 if (pem.enabled != billowing) pem.enabled = billowing;
             }
@@ -1128,11 +1374,11 @@ namespace SpaceMissionDesign.UI
     }
 
     /// <summary>
-    /// Orbit / pan / zoom camera driven by the mouse. Input stays live during flight -
-    /// the camera simply keeps following the rocket while the player orbits it.
-    /// LEFT-DRAG orbit · RIGHT-DRAG pan · SCROLL zoom · DOUBLE-CLICK recentre.
-    /// Arrow keys also orbit and +/- zoom as a fallback. Uses raw mouse deltas so it
-    /// never depends on Input Manager axis definitions.
+    /// Orbit / pan / zoom camera. Plain mouse movement never moves the camera - the view
+    /// only changes while a button is held:
+    /// RIGHT-DRAG orbit - MIDDLE-DRAG pan - SCROLL zoom - LEFT DOUBLE-CLICK recentre.
+    /// Arrow keys orbit and +/- zoom as a fallback. Uses raw mouse deltas so it never
+    /// depends on Input Manager axis definitions.
     /// </summary>
     public sealed class OrbitCamera : MonoBehaviour
     {
@@ -1144,7 +1390,6 @@ namespace SpaceMissionDesign.UI
         [Header("Feel")]
         public float zoomStep = .12f;
         public float orbitSensitivity = .22f;   // degrees per pixel while dragging
-        public float hoverSensitivity = .16f;   // degrees per pixel on plain mouse move over the 3D view
         public float keyOrbitSpeed = 90f;       // deg/s with arrow keys
         public float maxPanDistance = 70f;
 
@@ -1188,7 +1433,7 @@ namespace SpaceMissionDesign.UI
             lastMouse = mouse;
 
             // The launch sequence drives the camera until the player takes over.
-            if (!userControlled && AnyManualInput(delta)) userControlled = true;
+            if (!userControlled && AnyManualInput()) userControlled = true;
             if (!userControlled)
             {
                 float k0 = 1f - Mathf.Exp(-1.5f * dt);
@@ -1215,29 +1460,16 @@ namespace SpaceMissionDesign.UI
             distance = Mathf.Lerp(distance, targetDistance, 1f - Mathf.Exp(-14f * dt));
             if (Mathf.Abs(distance - targetDistance) < .002f) distance = targetDistance;
 
-            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             bool overUI = PointerOverUI();
 
-            // Left button drag orbits from anywhere.
-            if (Input.GetMouseButtonDown(0) && !shift)
-            {
-                orbiting = true;
-            }
-            if (Input.GetMouseButtonUp(0)) orbiting = false;
-
-            // Plain mouse movement over the 3D (right) half of the screen also orbits -
-            // no button required. This is the "move my mouse to change the camera" mode.
-            bool hoverLook = !overUI && !orbiting && mouse.x > Screen.width * .5f;
-
+            // --- orbit: RIGHT mouse button drag ---
+            // Plain mouse movement never moves the camera; the view only changes while a
+            // button is held (or a key is down), which is what the player expects.
+            orbiting = Input.GetMouseButton(1) && !overUI;
             if (orbiting)
             {
                 yaw += delta.x * orbitSensitivity;
                 pitch -= delta.y * orbitSensitivity;
-            }
-            else if (hoverLook && (Mathf.Abs(delta.x) > .01f || Mathf.Abs(delta.y) > .01f))
-            {
-                yaw += delta.x * hoverSensitivity;
-                pitch -= delta.y * hoverSensitivity;
             }
 
             // --- keyboard orbit fallback (always available) ---
@@ -1246,8 +1478,8 @@ namespace SpaceMissionDesign.UI
             if (Input.GetKey(KeyCode.UpArrow)) pitch += keyOrbitSpeed * dt;
             if (Input.GetKey(KeyCode.DownArrow)) pitch -= keyOrbitSpeed * dt;
 
-            // --- RIGHT/MIDDLE-DRAG pans ---
-            panning = Input.GetMouseButton(1) || Input.GetMouseButton(2) || (shift && Input.GetMouseButton(0));
+            // --- pan: MIDDLE mouse button drag ---
+            panning = Input.GetMouseButton(2);
             if (panning)
             {
                 float worldPerPixel = WorldUnitsPerPixel();
@@ -1255,8 +1487,8 @@ namespace SpaceMissionDesign.UI
                 panWanted = Vector3.ClampMagnitude(panWanted, maxPanDistance);
             }
 
-            // --- DOUBLE-CLICK recentres (skipped when clicking a UI button) ---
-            if (Input.GetMouseButtonDown(0) && !shift && !overUI)
+            // --- double-click recentres (left button; skipped over UI) ---
+            if (Input.GetMouseButtonDown(0) && !overUI)
             {
                 float now = Time.unscaledTime;
                 if (now - lastLeftClick < .28f) ResetView();
@@ -1284,10 +1516,10 @@ namespace SpaceMissionDesign.UI
         }
 
         /// <summary>True when the player is actively asking for camera control.</summary>
-        private static bool AnyManualInput(Vector3 delta)
+        private static bool AnyManualInput()
         {
-            return delta.sqrMagnitude > 2f ||
-                   Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2) ||
+            return Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2) ||
+                   Input.GetMouseButton(1) || Input.GetMouseButton(2) ||
                    Mathf.Abs(Input.mouseScrollDelta.y) > .01f ||
                    Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.RightArrow) ||
                    Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.DownArrow) ||
