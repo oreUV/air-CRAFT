@@ -78,13 +78,8 @@ namespace SpaceMissionDesign.UI
             BuildWorld();
             BuildCamera();
             Refresh(null);
-            Invoke(nameof(DumpDiagnostics), 1.5f);
         }
 
-        /// <summary>
-        /// One-time render diagnostic. Logs which camera renders, which camera we drive,
-        /// and whether the key objects are visible / in front of the camera.
-        /// </summary>
         /// <summary>
         /// Keeps exactly one camera rendering: ours, at the highest depth. Re-checked twice
         /// a second because a scene camera can appear after startup.
@@ -105,40 +100,6 @@ namespace SpaceMissionDesign.UI
                 if (c == null || c == rigCamera) continue;
                 c.enabled = false;
                 Debug.LogWarning($"Mission3DView: disabled extra camera '{c.name}' - it was drawing over the 3D view.");
-            }
-        }
-
-        private void DumpDiagnostics()
-        {
-            var cam = Camera.main;
-            Debug.Log($"[DIAG] pipeline={(UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline != null ? UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline.GetType().Name : "built-in")} standardShaderFound={Shader.Find("Standard") != null}");
-            Debug.Log($"[DIAG] cameraCount={Camera.allCamerasCount} main={(cam != null ? cam.name : "NULL")} " +
-                      $"enabled={(cam != null && cam.enabled)} rect={(cam != null ? cam.pixelRect.ToString() : "-")} " +
-                      $"pos={(cam != null ? cam.transform.position.ToString() : "-")} fwd={(cam != null ? cam.transform.forward.ToString() : "-")} " +
-                      $"fov={(cam != null ? cam.fieldOfView : 0f):F0} near={(cam != null ? cam.nearClipPlane : 0f)} far={(cam != null ? cam.farClipPlane : 0f)} " +
-                      $"clear={(cam != null ? cam.clearFlags.ToString() : "-")} mask={(cam != null ? cam.cullingMask : 0)}");
-            foreach (var c in Camera.allCameras)
-                Debug.Log($"[DIAG] camera '{c.name}' enabled={c.enabled} depth={c.depth} display={c.targetDisplay}");
-            DumpRenderer("Earth", earthSphere);
-            DumpRenderer("Moon", moonSphere);
-            DumpRenderer("Rocket", rocketRoot);
-            if (rocketRoot != null && cam != null)
-            {
-                var sp = cam.WorldToScreenPoint(rocketRoot.position + Vector3.up * 14f);
-                Debug.Log($"[DIAG] rocketScreenPoint={sp} screen={Screen.width}x{Screen.height} (z<0 = behind camera)");
-            }
-        }
-
-        private void DumpRenderer(string label, Transform t)
-        {
-            if (t == null) { Debug.Log($"[DIAG] {label}: transform NULL"); return; }
-            var rs = t.GetComponentsInChildren<Renderer>();
-            Debug.Log($"[DIAG] {label}: renderers={rs.Length}");
-            for (int i = 0; i < Mathf.Min(rs.Length, 5); i++)
-            {
-                var r = rs[i];
-                string shader = r.sharedMaterial != null ? r.sharedMaterial.shader.name : "no-material";
-                Debug.Log($"[DIAG]   {label}[{i}] '{r.name}' enabled={r.enabled} visible={r.isVisible} shader={shader} bounds={r.bounds}");
             }
         }
 
@@ -1199,8 +1160,6 @@ namespace SpaceMissionDesign.UI
         private bool panning;
         private float lastLeftClick = -10f;
         private Vector3 lastMouse;
-        private bool loggedInput;
-        private float lastDebugLog;
 
         // Cinematic framing used while the launch sequence plays. The first deliberate
         // mouse or key input hands full control back to the player.
@@ -1263,11 +1222,6 @@ namespace SpaceMissionDesign.UI
             if (Input.GetMouseButtonDown(0) && !shift)
             {
                 orbiting = true;
-                if (!loggedInput)
-                {
-                    loggedInput = true;
-                    Debug.Log($"OrbitCamera: left-drag detected at {mouse}. Hold the button and drag to orbit.");
-                }
             }
             if (Input.GetMouseButtonUp(0)) orbiting = false;
 
@@ -1284,12 +1238,6 @@ namespace SpaceMissionDesign.UI
             {
                 yaw += delta.x * hoverSensitivity;
                 pitch -= delta.y * hoverSensitivity;
-            }
-
-            if (Time.time - lastDebugLog > 1f && (orbiting || hoverLook) && (Mathf.Abs(delta.x) > .5f || Mathf.Abs(delta.y) > .5f))
-            {
-                lastDebugLog = Time.time;
-                Debug.Log($"OrbitCamera: yaw={yaw:F1} pitch={pitch:F1} dist={distance:F1} camPos={transform.position}");
             }
 
             // --- keyboard orbit fallback (always available) ---
