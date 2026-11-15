@@ -146,19 +146,19 @@ namespace SpaceMissionDesign.UI
             sun.transform.rotation = Quaternion.Euler(48f, -35f, 0f);
             DontDestroyOnLoad(lightGO);
 
-            // --- Earth: huge planet directly below the pad; its surface is at y=0 ---
+            // --- Earth: planet directly below the pad; surface at y=0 ---
             // Camera on the surface looks up at the rocket; Earth fills the lower view.
-            earthSphere = Sphere("Earth", new Vector3(10f, -300f, 0f), 300f, earthMat, null).transform;
+            earthSphere = Sphere("Earth", new Vector3(10f, -60f, 0f), 60f, earthMat, null).transform;
 
             // --- Cloud layer: just above Earth's surface, transparent ---
-            cloudLayer = Sphere("Cloud layer", new Vector3(10f, -300f, 0f), 310f, cloudMat, null).transform;
+            cloudLayer = Sphere("Cloud layer", new Vector3(10f, -60f, 0f), 68f, cloudMat, null).transform;
 
             // --- Launch pad sits on Earth's surface ---
             Cylinder("Launch pad", new Vector3(10f, 0f, 0f), 14f, .7f, pad, null);
             Cylinder("Pad ring", new Vector3(10f, .3f, 0f), 8f, .35f, grey, null);
 
             // --- Moon: far ahead in the direction of flight ---
-            moonSphere = Sphere("Moon", new Vector3(10f, 0f, 900f), 25f, moonMat, null).transform;
+            moonSphere = Sphere("Moon", new Vector3(10f, 0f, 400f), 18f, moonMat, null).transform;
 
             BuildStars();
 
@@ -244,13 +244,13 @@ namespace SpaceMissionDesign.UI
         // ---------------- model import ----------------
 
         /// <summary>
-        /// Loads the Saturn V.glb rocket as a single complete model and places it on the
-        /// launch pad on Earth. Tries the glb first, then falls back to a primitive stack.
+        /// Loads the Saturn V.fbx rocket as a single complete model and places it on the
+        /// launch pad on Earth. Falls back to a primitive stack if the fbx is missing.
         /// </summary>
-        private Transform PlaceSaturnVGlb(Transform parent, Vector3 at, float targetHeight)
+        private Transform PlaceSaturnVFbx(Transform parent, Vector3 at, float targetHeight)
         {
-            // Try the complete glb model first.
-            var prefab = Resources.Load<GameObject>("Models/Saturn V");
+            // Try the complete fbx model first.
+            var prefab = Resources.Load<GameObject>("Models/saturn");
             if (prefab != null)
             {
                 var go = Instantiate(prefab, parent);
@@ -293,7 +293,7 @@ namespace SpaceMissionDesign.UI
                 Destroy(go);
             }
 
-            Debug.LogWarning("Mission3DView: Saturn V.glb not found or invalid, using primitive rocket.");
+            Debug.LogWarning("Mission3DView: Saturn V.fbx not found or invalid, using primitive rocket.");
             return null;
         }
 
@@ -409,8 +409,8 @@ namespace SpaceMissionDesign.UI
             root.position = new Vector3(10f, 0f, 0f);
             rocketRoot = root;
 
-            // --- Load the complete Saturn V.glb rocket ---
-            var saturnV = PlaceSaturnVGlb(root, new Vector3(0, 0, 0), 28f);
+            // --- Load the complete Saturn V.fbx rocket ---
+            var saturnV = PlaceSaturnVFbx(root, new Vector3(0, 0, 0), 28f);
 
             // Fallback: primitive rocket if the glb is missing.
             if (saturnV == null)
@@ -537,8 +537,8 @@ namespace SpaceMissionDesign.UI
                 // Earth recedes below and grows (curved horizon).
                 if (earthSphere != null)
                 {
-                    float earthY = Mathf.Lerp(-300f, -900f, s);
-                    float earthScale = Mathf.Lerp(300f, 700f, s);
+                    float earthY = Mathf.Lerp(-60f, -220f, s);
+                    float earthScale = Mathf.Lerp(60f, 150f, s);
                     earthSphere.position = earthStart + new Vector3(0f, earthY - earthStart.y, 0f);
                     earthSphere.localScale = Vector3.one * earthScale;
                 }
@@ -556,7 +556,7 @@ namespace SpaceMissionDesign.UI
                         c.a = cloudAlpha;
                         cloudRend.material.color = c;
                     }
-                    cloudLayer.localScale = Vector3.one * Mathf.Lerp(310f, 720f, s);
+                    cloudLayer.localScale = Vector3.one * Mathf.Lerp(68f, 160f, s);
                 }
 
                 // Sky: surface blue -> space black.
@@ -584,8 +584,8 @@ namespace SpaceMissionDesign.UI
                 // Moon grows ahead.
                 if (moonSphere != null)
                 {
-                    float moonZ = Mathf.Lerp(900f, 500f, s);
-                    float moonScale = Mathf.Lerp(25f, 55f, s);
+                    float moonZ = Mathf.Lerp(400f, 320f, s);
+                    float moonScale = Mathf.Lerp(18f, 40f, s);
                     moonSphere.position = new Vector3(moonStart.x, moonStart.y, moonZ);
                     moonSphere.localScale = Vector3.one * moonScale;
                 }
