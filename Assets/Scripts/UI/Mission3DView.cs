@@ -99,7 +99,12 @@ namespace SpaceMissionDesign.UI
             // --- Earth textures from Downloads (Earth A = surface map, Earth B = cloud map) ---
             earthTex = Resources.Load<Texture2D>("Textures/Earth (A)");
             var earthBRaw = Resources.Load<Texture2D>("Textures/Earth (B)");
-            cloudTex = earthBRaw != null ? MakeCloudsFromMap(earthBRaw) : TextureGenerator.Clouds();
+            if (earthBRaw != null)
+            {
+                try { cloudTex = MakeCloudsFromMap(earthBRaw); }
+                catch (System.Exception) { cloudTex = TextureGenerator.Clouds(); Debug.LogWarning("Mission3DView: Earth (B) texture not readable; using procedural clouds instead."); }
+            }
+            else cloudTex = TextureGenerator.Clouds();
 
             earthMat = Mat("Earth", earthTex ?? TextureGenerator.Earth(), tint: Color.white, .02f, .2f, new Color(.01f, .04f, .09f));
             cloudMat = Mat("Clouds", cloudTex, tint: Color.white, 0f, .1f, null);
