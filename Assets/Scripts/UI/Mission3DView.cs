@@ -12,7 +12,7 @@ namespace SpaceMissionDesign.UI
         /// <summary>Fired once when the full Earth->Moon->Earth flight completes (or is skipped).</summary>
         public static Action MissionComplete;
 
-        public enum FlightPhase { PreLaunch, Ascent, TransitToMoon, MoonArrival, MoonStay, ReturnToEarth, EarthArrival, Complete }
+        public enum FlightPhase { PreLaunch, Countdown, Ignition, Ascent, TransitToMoon, MoonArrival, MoonStay, ReturnToEarth, EarthArrival, Complete }
 
         private Transform rocketRoot;
         private Transform focus;
@@ -22,7 +22,7 @@ namespace SpaceMissionDesign.UI
         private Vector3 flameBaseScale = Vector3.one;
         private Transform flame;
         private ParticleSystem exhaust;
-        private Vector3 focusHome = new Vector3(10f, 14f, 0f);
+        private Vector3 focusHome = new Vector3(10f, 18f, 0f);
         private Material white, metal, dark, gold, blue, grey, red, pad, flag, earthMat, moonMat, flameMat, exhaustMat, cloudMat;
 
         // ---------------- world layout (all fixed; the rocket travels through it) ----------------
@@ -41,6 +41,11 @@ namespace SpaceMissionDesign.UI
         private Material starMat;
         private Texture2D earthTex;
         private Texture2D cloudTex;
+        private ParticleSystem padSmoke;
+        private const float PadHeight = 3f;                 // top of the launch table
+        private Vector3 rocketPadHome = new Vector3(10f, PadHeight, 0f);
+        private const float CountdownSeconds = 4f;
+        private const float IgnitionSeconds = 2.2f;
 
         // ---------------- flight state ----------------
         private FlightPhase phase = FlightPhase.PreLaunch;
@@ -147,7 +152,7 @@ namespace SpaceMissionDesign.UI
             get
             {
                 if (rocketRoot == null) return 0f;
-                return (rocketRoot.position - EarthCenter).magnitude - EarthR;
+                return Mathf.Max(0f, (rocketRoot.position - EarthCenter).magnitude - EarthR - PadHeight);
             }
         }
 
@@ -160,6 +165,9 @@ namespace SpaceMissionDesign.UI
                 switch (phase)
                 {
                     case FlightPhase.PreLaunch: return "READY ON PAD";
+                    case FlightPhase.Countdown:
+                        return $"COUNTDOWN  T-{Mathf.Max(0f, CountdownSeconds - phaseElapsed):F0}s  -  ALL SYSTEMS GO";
+                    case FlightPhase.Ignition: return "IGNITION  -  HOLD-DOWN CLAMPS RELEASING";
                     case FlightPhase.Ascent: return $"ASCENT  ·  ALT {AltitudeUnits * kmPerUnit:N0} km";
                     case FlightPhase.TransitToMoon: return $"TRANSLUNAR  ·  MOON {Vector3.Distance(rocketRoot != null ? rocketRoot.position : EarthCenter, MoonCenter) * kmPerUnit:N0} km";
                     case FlightPhase.MoonArrival: return "LUNAR APPROACH  ·  BRAKING";
@@ -268,9 +276,14 @@ namespace SpaceMissionDesign.UI
             // The rocket physically climbs away from it - the horizon curvature,
             // shrinking planet and thinning sky all come from real geometry.
             earthSphere = Sphere("Earth", EarthCenter, EarthR * 2f, earthMat, null).transform;
+            // Rotate the planet so the launch site is not sitting on the sphere's UV pole.
+            // At the pole every texture column converges to one point, which smears the
+            // ground into radial streaks.
+            earthSphere.rotation = Quaternion.Euler(0f, 0f, 90f);
 
             // Cloud shell hugging the surface - the rocket flies straight through it.
             cloudLayer = Sphere("Cloud layer", EarthCenter, CloudShellR * 2f, cloudMat, null).transform;
+            cloudLayer.rotation = earthSphere.rotation;
             if (cloudLayer.TryGetComponent<MeshRenderer>(out var cr) && cr.material != null)
             {
                 var c = cr.material.color;
@@ -278,23 +291,144 @@ namespace SpaceMissionDesign.UI
                 cr.material.color = c;
             }
 
-            // Launch pad on the surface.
-            Cylinder("Launch pad", new Vector3(10f, 0f, 0f), 14f, .7f, pad, null);
-            Cylinder("Pad ring", new Vector3(10f, .3f, 0f), 8f, .35f, grey, null);
+            BuildLaunchComplex();
 
             // Moon: fixed far ahead along the flight path.
             moonSphere = Sphere("Moon", MoonCenter, MoonR * 2f, moonMat, null).transform;
 
-            // Temporary render check: an unlit magenta marker floating above the pad.
-            // If this is not visible on screen, nothing 3D is rendering at all.
-            var markerMat = new Material(Shader.Find("Unlit/Color") ?? Shader.Find("Standard"));
-            if (markerMat.HasProperty("_Color")) markerMat.SetColor("_Color", new Color(1f, 0f, .8f));
-            var marker = Cube("Render Check Marker", new Vector3(10f, 48f, 0f), new Vector3(4f, 4f, 4f), markerMat, null);
-            DontDestroyOnLoad(marker);
+            BuildPadSmoke();
+
+            // Distance haze so the ground blends into the sky at the horizon.
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.Linear;
+            RenderSettings.fogColor = surfaceSky;
+            RenderSettings.fogStartDistance = 260f;
+            RenderSettings.fogEndDistance = 2400f;
 
             BuildStars();
 
             if (Camera.main != null) Camera.main.backgroundColor = surfaceSky;
+        }
+
+        /// <summary>
+        /// Apollo launch complex: concrete apron, pad deck, flame trench, hold-down
+        /// clamps and the red service tower with umbilical arms.
+        /// </summary>
+        private void BuildLaunchComplex()
+        {
+            var complex = new GameObject("Launch Complex").transform;
+            DontDestroyOnLoad(complex.gameObject);
+
+            // Flat concrete apron + pad deck at ground level (top exactly at y = 0).
+            Cube("Concrete apron", new Vector3(10f, -.4f, 0f), new Vector3(36f, .8f, 36f), pad, complex);
+            Cylinder("Pad deck", new Vector3(10f, -.22f, 0f), 13f, .45f, grey, complex);
+            Cube("Flame trench", new Vector3(10f, -.28f, 0f), new Vector3(21f, .55f, 4.6f), dark, complex);
+
+            // Raised launch table: the vehicle stands on this ring, so the engines vent
+            // down through the open centre and the flame stays visible above the ground
+            // exactly as it does on a real launch mount.
+            for (int i = 0; i < 8; i++)
+            {
+                float a = i * 45f * Mathf.Deg2Rad;
+                var p = new Vector3(10f + Mathf.Cos(a) * 3.4f, PadHeight - .3f, Mathf.Sin(a) * 3.4f);
+                var seg = Cube("Launch table", p, new Vector3(3.1f, .6f, 1.4f), metal, complex);
+                seg.transform.localRotation = Quaternion.Euler(0f, -i * 45f, 0f);
+            }
+            for (int i = 0; i < 4; i++)
+            {
+                float a = (i * 90f + 45f) * Mathf.Deg2Rad;
+                var p = new Vector3(10f + Mathf.Cos(a) * 3.65f, PadHeight * .5f, Mathf.Sin(a) * 3.65f);
+                Cube("Table leg", p, new Vector3(.9f, PadHeight, .9f), dark, complex);
+            }
+
+            // Hold-down clamps gripping the base of the vehicle.
+            for (int i = 0; i < 4; i++)
+            {
+                float ang = (i * 90f + 45f) * Mathf.Deg2Rad;
+                var p = new Vector3(10f + Mathf.Cos(ang) * 3.5f, PadHeight + .65f, Mathf.Sin(ang) * 3.5f);
+                Cube("Hold-down clamp", p, new Vector3(1.5f, 1.3f, 1.5f), metal, complex);
+            }
+
+            // Service tower beside the rocket.
+            var tower = new GameObject("Service Tower").transform;
+            tower.SetParent(complex, false);
+            const float bx = 19.5f, bz = 0f, half = 2.3f, height = 44f;
+
+            var corners = new[]
+            {
+                new Vector3(-half, 0f, -half), new Vector3(half, 0f, -half),
+                new Vector3(half, 0f, half), new Vector3(-half, 0f, half)
+            };
+            foreach (var c in corners)
+                Cube("Tower leg", new Vector3(bx + c.x, height * .5f, bz + c.z), new Vector3(.5f, height, .5f), red, tower);
+
+            for (float y = 3f; y <= height; y += 3.7f)
+            {
+                Cube("Tower beam", new Vector3(bx, y, bz - half), new Vector3(half * 2f, .24f, .24f), grey, tower);
+                Cube("Tower beam", new Vector3(bx, y, bz + half), new Vector3(half * 2f, .24f, .24f), grey, tower);
+                Cube("Tower beam", new Vector3(bx - half, y, bz), new Vector3(.24f, .24f, half * 2f), grey, tower);
+                Cube("Tower beam", new Vector3(bx + half, y, bz), new Vector3(.24f, .24f, half * 2f), grey, tower);
+            }
+
+            Cube("Tower platform", new Vector3(bx, height, bz), new Vector3(6f, .5f, 6f), metal, tower);
+            Cube("Tower mast", new Vector3(bx, height + 4.6f, bz), new Vector3(.35f, 9f, .35f), metal, tower);
+            Cube("Lightning rod", new Vector3(bx, height + 9.4f, bz), new Vector3(.12f, 1.4f, .12f), red, tower);
+
+            // Umbilical arms reaching out toward the rocket.
+            Cube("Umbilical arm", new Vector3(bx - half - 2.6f, 22f, bz), new Vector3(6f, .55f, 1f), grey, tower);
+            Cube("Umbilical arm", new Vector3(bx - half - 2.6f, 11f, bz), new Vector3(6f, .55f, 1f), grey, tower);
+
+            // Support buildings on the apron (sunk slightly so the curved ground does not
+            // leave them floating at the edges of the pad).
+            Cube("Blockhouse", new Vector3(-9f, 1.4f, 11f), new Vector3(9f, 3.4f, 7f), grey, complex);
+            Cube("Water tower", new Vector3(31f, 6.1f, -9f), new Vector3(2.4f, 14f, 2.4f), metal, complex);
+        }
+
+        /// <summary>Ground smoke that billows out of the flame trench at ignition.</summary>
+        private void BuildPadSmoke()
+        {
+            var go = new GameObject("Pad Smoke");
+            go.transform.position = new Vector3(10f, 1.2f, 0f);
+            var ps = go.AddComponent<ParticleSystem>();
+            var main = ps.main;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(3f, 6f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(3f, 8f);
+            main.startSize = new ParticleSystem.MinMaxCurve(5f, 13f);
+            main.startColor = new ParticleSystem.MinMaxGradient(
+                new Color(.92f, .92f, .94f, .30f), new Color(.75f, .74f, .73f, .14f));
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.maxParticles = 900;
+            main.gravityModifier = -.015f;
+
+            var emission = ps.emission;
+            emission.enabled = false;
+            emission.rateOverTime = 90f;
+
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Circle;
+            shape.radius = 7f;
+            shape.rotation = new Vector3(-90f, 0f, 0f); // emit upward, then spread outward
+
+            // Radial velocity turns the rising column into the ground-hugging cloud
+            // that rolls away from the flame trench on a real launch.
+            var vel = ps.velocityOverLifetime;
+            vel.enabled = true;
+            vel.space = ParticleSystemSimulationSpace.Local;
+            vel.radial = new ParticleSystem.MinMaxCurve(7f, 17f);
+
+            Shader psShader = Shader.Find("Particles/Standard Unlit");
+            if (psShader == null) psShader = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
+            if (psShader == null) psShader = Shader.Find("Sprites/Default");
+            var psMat = new Material(psShader != null ? psShader : Shader.Find("Unlit/Color"));
+            psMat.mainTexture = TextureGenerator.SoftDot();
+            if (psMat.HasProperty("_Color")) psMat.SetColor("_Color", new Color(.95f, .95f, .96f, .55f));
+            var psRenderer = go.GetComponent<ParticleSystemRenderer>();
+            psRenderer.material = psMat;
+            psRenderer.renderMode = ParticleSystemRenderMode.Billboard;
+            psRenderer.sortingFudge = 4f;
+
+            padSmoke = ps;
+            DontDestroyOnLoad(go);
         }
 
         private void BuildStars()
@@ -540,7 +674,7 @@ namespace SpaceMissionDesign.UI
             ResetFlightState();
 
             var root = new GameObject("Rocket").transform;
-            root.position = new Vector3(10f, 0f, 0f);
+            root.position = rocketPadHome;
             root.rotation = Quaternion.identity;
             rocketRoot = root;
 
@@ -582,6 +716,8 @@ namespace SpaceMissionDesign.UI
                 var em = exhaust.emission;
                 em.enabled = false;
             }
+            ArmPadSmoke(false);
+            if (cameraRig != null) cameraRig.shake = 0f;
         }
 
         private void BuildExhaust(Transform root, float y)
@@ -626,8 +762,25 @@ namespace SpaceMissionDesign.UI
             if (rocketRoot == null || InFlight) return;
             ResetFlightState();
             cameraRig?.ClearPan();
-            phase = FlightPhase.Ascent;
+
+            // Park the vehicle exactly on the pad before the clock starts.
+            rocketRoot.position = rocketPadHome;
+            rocketRoot.rotation = Quaternion.identity;
+
+            // Hold a low, cinematic pad framing; the first mouse or key input hands
+            // control straight back to the player.
+            if (cameraRig != null)
+            {
+                cameraRig.userControlled = false;
+                cameraRig.cinematicPitch = 6f;
+                cameraRig.cinematicYaw = 55f;
+                cameraRig.cinematicDistance = 42f;
+            }
+
+            phase = FlightPhase.Countdown;
             phaseElapsed = 0f;
+            flightSpeed = 0f;
+            flightDir = Vector3.up;
             if (Camera.main != null) Camera.main.backgroundColor = surfaceSky;
         }
 
@@ -642,6 +795,12 @@ namespace SpaceMissionDesign.UI
                 var em = exhaust.emission;
                 em.enabled = false;
             }
+            ArmPadSmoke(false);
+            if (cameraRig != null)
+            {
+                cameraRig.shake = 0f;
+                cameraRig.userControlled = true;
+            }
             MissionComplete?.Invoke();
         }
 
@@ -653,10 +812,12 @@ namespace SpaceMissionDesign.UI
             if (rocketRoot == null) return;
 
             // Camera focus chases the rocket the whole time so the player can orbit freely.
+            // The chase is deliberately tight: at ascent speed a soft follow would let the
+            // vehicle drift right out of frame.
             Vector3 focusTarget = phase == FlightPhase.PreLaunch
                 ? focusHome
-                : rocketRoot.position + Vector3.up * 10f;
-            float k = 1f - Mathf.Exp(-3.5f * Time.deltaTime);
+                : rocketRoot.position + Vector3.up * 15f;
+            float k = 1f - Mathf.Exp(-18f * Time.deltaTime);
             focus.position = Vector3.Lerp(focus.position, focusTarget, k);
 
             if (!InFlight) return;
@@ -689,6 +850,25 @@ namespace SpaceMissionDesign.UI
             }
 
             UpdateEngineVisuals();
+
+            // Distance haze follows the sky, so the ground stops looking hazy in orbit.
+            if (RenderSettings.fog)
+            {
+                RenderSettings.fogColor = Color.Lerp(surfaceSky, spaceSky, skyT);
+                RenderSettings.fogStartDistance = Mathf.Lerp(260f, 4200f, skyT);
+                RenderSettings.fogEndDistance = Mathf.Lerp(2400f, 8000f, skyT);
+            }
+
+            // Launch vibration: strongest at ignition, fading as the vehicle clears the pad.
+            if (cameraRig != null)
+            {
+                float shake = 0f;
+                if (phase == FlightPhase.Ignition)
+                    shake = .13f * Mathf.Clamp01(phaseElapsed / IgnitionSeconds);
+                else if (phase == FlightPhase.Ascent)
+                    shake = .13f * Mathf.Clamp01(1f - alt / 60f);
+                cameraRig.shake = Mathf.Max(shake, cameraRig.shake);
+            }
         }
 
         private void StepFlight()
@@ -697,17 +877,62 @@ namespace SpaceMissionDesign.UI
             float dt = Time.deltaTime;
             Vector3 toMoon = (MoonCenter - EarthCenter).normalized;
             Vector3 upNow = (pos - EarthCenter).normalized;
-            float alt = (pos - EarthCenter).magnitude - EarthR;
+            float alt = (pos - EarthCenter).magnitude - EarthR - PadHeight;
 
             switch (phase)
             {
+                case FlightPhase.Countdown:
+                {
+                    // Vehicle restrains on the pad while the launch clock runs down.
+                    flightDir = Vector3.up;
+                    pos = rocketPadHome;
+                    if (rocketRoot != null) rocketRoot.rotation = Quaternion.identity;
+                    if (phaseElapsed >= CountdownSeconds)
+                    {
+                        phase = FlightPhase.Ignition;
+                        phaseElapsed = 0f;
+                        ArmPadSmoke(true);
+                    }
+                    break;
+                }
+
+                case FlightPhase.Ignition:
+                {
+                    float t = Mathf.Clamp01(phaseElapsed / IgnitionSeconds);
+
+                    // The stack shivers against the hold-down clamps as thrust builds.
+                    float strainX = Mathf.Sin(Time.time * 61f) * .034f * t;
+                    float strainZ = Mathf.Cos(Time.time * 47f) * .024f * t;
+
+                    // Clamps release at ~55% of spool-up; the vehicle then eases upward
+                    // a couple of metres before the Ascent phase takes over.
+                    float rise = Mathf.Clamp01((t - .55f) / .45f);
+                    rise = rise * rise * 2.4f;
+
+                    pos = rocketPadHome + new Vector3(strainX, rise, strainZ);
+                    flightDir = Vector3.up;
+                    if (rocketRoot != null)
+                        rocketRoot.rotation = Quaternion.Euler(strainZ * 90f, 0f, -strainX * 90f);
+
+                    if (t >= 1f)
+                    {
+                        phase = FlightPhase.Ascent;
+                        phaseElapsed = 0f;
+                        flightSpeed = 1.4f;
+                    }
+                    break;
+                }
+
                 case FlightPhase.Ascent:
                 {
                     // Continuous acceleration off the pad; pitch over toward the Moon
                     // between turnStartAlt and turnFullAlt (classic gravity turn).
+                    // Thrust builds over the first seconds, so the vehicle starts slowly
+                    // and only then gains real speed - a liftoff, not a teleport.
                     const float turnStartAlt = 70f, turnFullAlt = 260f;
                     float climb = Mathf.Clamp01(alt / turnFullAlt);
-                    flightSpeed = Mathf.Lerp(9f, 165f, climb);
+                    float speedCap = Mathf.Lerp(26f, 168f, climb * climb);
+                    flightSpeed = Mathf.Min(flightSpeed + 11.5f * dt, speedCap);
 
                     float turn = Mathf.Clamp01((alt - turnStartAlt) / (turnFullAlt - turnStartAlt));
                     flightDir = Vector3.Slerp(Vector3.up, toMoon, turn).normalized;
@@ -801,21 +1026,22 @@ namespace SpaceMissionDesign.UI
 
                 case FlightPhase.EarthArrival:
                 {
-                    float altHome = (pos - EarthCenter).magnitude - EarthR;
+                    float altHome = (pos - EarthCenter).magnitude - EarthR - PadHeight;
                     flightSpeed = Mathf.Max(flightSpeed - 90f * dt, 10f);
                     Vector3 descend = (EarthCenter - pos).normalized;
                     pos += descend * (flightSpeed * dt);
 
                     if (altHome <= .5f)
                     {
-                        // Touch down on the pad.
+                        // Touch down on the launch table.
                         Vector3 radial = (pos - EarthCenter).normalized;
-                        pos = EarthCenter + radial * (EarthR + .01f);
+                        pos = EarthCenter + radial * (EarthR + PadHeight + .01f);
                         pos.x = 10f; pos.z = 0f;
                         rocketRoot.position = pos;
                         rocketRoot.rotation = Quaternion.LookRotation(Vector3.forward, radial);
                         phase = FlightPhase.Complete;
                         SetBurn(false);
+                        ArmPadSmoke(true);
                         MissionComplete?.Invoke();
                         return;
                     }
@@ -825,8 +1051,9 @@ namespace SpaceMissionDesign.UI
 
             rocketRoot.position = pos;
 
-            // Nose follows the flight direction.
-            if (phase != FlightPhase.MoonStay && phase != FlightPhase.EarthArrival)
+            // Nose follows the flight direction (the pad phases set their own orientation).
+            if (phase != FlightPhase.MoonStay && phase != FlightPhase.EarthArrival &&
+                phase != FlightPhase.Countdown && phase != FlightPhase.Ignition)
             {
                 Quaternion want = Quaternion.FromToRotation(Vector3.up, flightDir);
                 rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-2.2f * dt));
@@ -845,21 +1072,48 @@ namespace SpaceMissionDesign.UI
 
         private void UpdateEngineVisuals()
         {
-            bool burning = phase == FlightPhase.Ascent || phase == FlightPhase.TransitToMoon ||
+            bool spooling = phase == FlightPhase.Ignition;
+            bool burning = spooling || phase == FlightPhase.Ascent || phase == FlightPhase.TransitToMoon ||
                            phase == FlightPhase.MoonArrival || phase == FlightPhase.ReturnToEarth ||
                            phase == FlightPhase.EarthArrival;
             if (flame != null && flame.gameObject.activeSelf != burning) SetBurn(burning);
+
+            // Fire builds from a stub to full thrust while the engines spool up.
+            float fire = 1f;
+            if (spooling) fire = Mathf.Clamp01(phaseElapsed / (IgnitionSeconds * .7f));
+
             if (exhaust != null)
             {
                 var em = exhaust.emission;
                 if (em.enabled != burning) em.enabled = burning;
+                if (burning) em.rateOverTime = 320f * fire;
             }
 
             if (flame != null && burning)
             {
                 float flicker = 1f + Mathf.Sin(Time.time * 38f) * .12f;
-                flame.localScale = new Vector3(flameBaseScale.x * flicker, flameBaseScale.y * (2f - flicker), flameBaseScale.z * flicker);
+                flame.localScale = new Vector3(
+                    flameBaseScale.x * flicker * fire,
+                    flameBaseScale.y * (2f - flicker) * (.3f + .7f * fire),
+                    flameBaseScale.z * flicker * fire);
             }
+
+            // Pad smoke billows from the flame trench at ignition and thins as the
+            // vehicle climbs away.
+            if (padSmoke != null)
+            {
+                bool billowing = spooling || (phase == FlightPhase.Ascent && AltitudeUnits < 55f);
+                var pem = padSmoke.emission;
+                if (pem.enabled != billowing) pem.enabled = billowing;
+            }
+        }
+
+        /// <summary>Switches the ground smoke cloud at the flame trench on or off.</summary>
+        private void ArmPadSmoke(bool on)
+        {
+            if (padSmoke == null) return;
+            var em = padSmoke.emission;
+            em.enabled = on;
         }
 
         // ---------------- primitive helpers ----------------
@@ -948,6 +1202,16 @@ namespace SpaceMissionDesign.UI
         private bool loggedInput;
         private float lastDebugLog;
 
+        // Cinematic framing used while the launch sequence plays. The first deliberate
+        // mouse or key input hands full control back to the player.
+        public bool userControlled = true;
+        public float cinematicPitch = 5f;
+        public float cinematicYaw = 0f;
+        public float cinematicDistance = 46f;
+
+        // Engine vibration, in world units. Set by the mission each frame, decays here.
+        public float shake;
+
         private void LateUpdate()
         {
             if (target == null) return;
@@ -963,6 +1227,17 @@ namespace SpaceMissionDesign.UI
             Vector3 mouse = Input.mousePosition;
             Vector3 delta = mouse - lastMouse;
             lastMouse = mouse;
+
+            // The launch sequence drives the camera until the player takes over.
+            if (!userControlled && AnyManualInput(delta)) userControlled = true;
+            if (!userControlled)
+            {
+                float k0 = 1f - Mathf.Exp(-1.5f * dt);
+                pitch = Mathf.LerpAngle(pitch, cinematicPitch, k0);
+                yaw = Mathf.LerpAngle(yaw, cinematicYaw, k0);
+                targetDistance = Mathf.Lerp(targetDistance, cinematicDistance, k0);
+                distance = Mathf.Lerp(distance, targetDistance, 1f - Mathf.Exp(-14f * dt));
+            }
 
             // --- zoom: scroll wheel (mouse must be over the game window for this to fire) ---
             float scroll = Input.mouseScrollDelta.y;
@@ -1047,10 +1322,34 @@ namespace SpaceMissionDesign.UI
             var rot = Quaternion.Euler(pitch, yaw, 0f);
             transform.position = pivot + rot * new Vector3(0f, 0f, -distance);
             transform.LookAt(pivot);
+
+            // Engine/launch vibration.
+            if (shake > .0005f)
+            {
+                transform.position += new Vector3(
+                    UnityEngine.Random.Range(-shake, shake),
+                    UnityEngine.Random.Range(-shake, shake),
+                    UnityEngine.Random.Range(-shake, shake));
+                shake *= .88f;
+            }
+            else shake = 0f;
+        }
+
+        /// <summary>True when the player is actively asking for camera control.</summary>
+        private static bool AnyManualInput(Vector3 delta)
+        {
+            return delta.sqrMagnitude > 2f ||
+                   Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2) ||
+                   Mathf.Abs(Input.mouseScrollDelta.y) > .01f ||
+                   Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.RightArrow) ||
+                   Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.DownArrow) ||
+                   Input.GetKey(KeyCode.Equals) || Input.GetKey(KeyCode.Minus) ||
+                   Input.GetKey(KeyCode.KeypadPlus) || Input.GetKey(KeyCode.KeypadMinus);
         }
 
         public void ResetView()
         {
+            userControlled = true;
             pitch = 5f;
             yaw = 0f;
             panWanted = Vector3.zero;
