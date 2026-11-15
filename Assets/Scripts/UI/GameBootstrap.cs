@@ -146,14 +146,31 @@ namespace SpaceMissionDesign.UI
             Color? tint = null, int fontSize = 20)
         {
             var rt = NewRect(parent, "Button", pos, size);
+            var baseColor = tint ?? new Color(.12f, .58f, .95f);
+            var hoverColor = new Color(Mathf.Min(baseColor.r + .15f, 1f), Mathf.Min(baseColor.g + .15f, 1f),
+                Mathf.Min(baseColor.b + .15f, 1f));
             var img = rt.gameObject.AddComponent<Image>();
-            img.color = tint ?? new Color(.16f, .34f, .58f);
+            img.color = baseColor;
+            img.raycastTarget = true;
             var btn = rt.gameObject.AddComponent<Button>();
             btn.targetGraphic = img;
             var nav = btn.navigation;
             nav.mode = Navigation.Mode.None;
             btn.navigation = nav;
             if (onClick != null) btn.onClick.AddListener(() => onClick());
+            // Hover effect.
+            var hoverBlock = new ColorBlock
+            {
+                normalColor = baseColor,
+                highlightedColor = hoverColor,
+                pressedColor = new Color(Mathf.Max(baseColor.r - .1f, 0f), Mathf.Max(baseColor.g - .1f, 0f),
+                    Mathf.Max(baseColor.b - .1f, 0f)),
+                selectedColor = baseColor,
+                disabledColor = new Color(.5f, .5f, .5f, .5f),
+                colorMultiplier = 1f,
+                fadeDuration = .1f
+            };
+            btn.colors = hoverBlock;
             NewText(rt, label, fontSize, Vector2.zero, size, TextAnchor.MiddleCenter, new Color(.95f, .97f, 1f));
             return btn;
         }
@@ -241,8 +258,35 @@ namespace SpaceMissionDesign.UI
             backdrop.offsetMin = Vector2.zero;
             backdrop.offsetMax = Vector2.zero;
             var backImg = backdrop.gameObject.AddComponent<Image>();
-            backImg.color = new Color(.012f, .016f, .028f);
+            backImg.color = new Color(.008f, .010f, .020f);
             backImg.raycastTarget = false;
+
+            // Subtle starfield particles across the backdrop.
+            var starGO = new GameObject("UI Starfield");
+            starGO.transform.SetParent(parent, false);
+            var starPS = starGO.AddComponent<ParticleSystem>();
+            var starMain = starPS.main;
+            starMain.startSpeed = 0f;
+            starMain.startLifetime = 9999f;
+            starMain.startSize = new ParticleSystem.MinMaxCurve(.05f, .15f);
+            starMain.maxParticles = 120;
+            starMain.simulationSpace = ParticleSystemSimulationSpace.World;
+            starMain.gravityModifier = 0f;
+            var starEmission = starPS.emission;
+            starEmission.enabled = false;
+            var starShape = starPS.shape;
+            starShape.shapeType = ParticleSystemShapeType.Rectangle;
+            starShape.scale = new Vector3(1920f, 1080f, 1f);
+            starShape.position = new Vector3(0f, 0f, 100f);
+            var starShader = Shader.Find("Particles/Standard Unlit");
+            if (starShader == null) starShader = Shader.Find("Sprites/Default");
+            var starMat = new Material(starShader != null ? starShader : Shader.Find("Unlit/Color"));
+            starMat.mainTexture = TextureGenerator.SoftDot();
+            if (starMat.HasProperty("_Color")) starMat.SetColor("_Color", new Color(.95f, .98f, 1f, .6f));
+            var starRenderer = starGO.GetComponent<ParticleSystemRenderer>();
+            starRenderer.material = starMat;
+            starRenderer.renderMode = ParticleSystemRenderMode.Billboard;
+            starPS.Emit(120);
 
             // Subtle vignette around edges.
             var vignette = NewRect(parent, "Vignette", Vector2.zero, Vector2.zero);
@@ -251,7 +295,7 @@ namespace SpaceMissionDesign.UI
             vignette.offsetMin = Vector2.zero;
             vignette.offsetMax = Vector2.zero;
             var vigImg = vignette.gameObject.AddComponent<Image>();
-            vigImg.color = new Color(0f, 0f, 0f, .45f);
+            vigImg.color = new Color(0f, 0f, 0f, .5f);
             vigImg.raycastTarget = false;
 
             // Dark panel behind the left-half UI so text stays readable over the 3D view.
@@ -261,16 +305,16 @@ namespace SpaceMissionDesign.UI
             panel.anchoredPosition = Vector2.zero;
             panel.sizeDelta = new Vector2(960f, 1080f);
             var panelImg = panel.gameObject.AddComponent<Image>();
-            panelImg.color = new Color(.035f, .05f, .09f, .88f);
+            panelImg.color = new Color(.035f, .05f, .09f, .92f);
             panelImg.raycastTarget = false;
 
-            // Top accent bar.
+            // Top accent bar (NASA blue).
             var accent = NewRect(panel, "Accent Bar", new Vector2(0f, 460f), new Vector2(860f, 4f));
             accent.anchorMin = new Vector2(.5f, 1f);
             accent.anchorMax = new Vector2(.5f, 1f);
             accent.pivot = new Vector2(.5f, 1f);
             var accImg = accent.gameObject.AddComponent<Image>();
-            accImg.color = new Color(.24f, .60f, .95f);
+            accImg.color = new Color(.12f, .58f, .95f);
             accImg.raycastTarget = false;
 
             // Camera control hint on the 3D side of the screen.
@@ -280,29 +324,39 @@ namespace SpaceMissionDesign.UI
         }
 
         /// <summary>
-        /// Draws a rounded-ish panel with a header, useful for grouping related controls.
+        /// Draws a panel with a header, border, and subtle accent.
         /// </summary>
         private static RectTransform Panel(Transform parent, string header, Vector2 pos, Vector2 size,
             Color? headerColor = null)
         {
             var rt = NewRect(parent, "Panel", pos, size);
             var img = rt.gameObject.AddComponent<Image>();
-            img.color = new Color(.06f, .09f, .15f, .92f);
+            img.color = new Color(.045f, .065f, .105f, .94f);
             img.raycastTarget = false;
 
-            // Subtle border.
-            var border = NewRect(rt, "Border", Vector2.zero, size + new Vector2(2f, 2f));
+            // Outer border (NASA blue).
+            var border = NewRect(rt, "Border", Vector2.zero, size + new Vector2(3f, 3f));
             border.anchorMin = border.anchorMax = border.pivot = new Vector2(.5f, .5f);
             border.anchoredPosition = Vector2.zero;
             var bImg = border.gameObject.AddComponent<Image>();
-            bImg.color = new Color(.24f, .60f, .95f, .35f);
+            bImg.color = new Color(.12f, .58f, .95f, .5f);
             bImg.raycastTarget = false;
 
+            // Inner divider below header.
             if (!string.IsNullOrEmpty(header))
             {
-                NewText(rt, header, 17, new Vector2(-size.x * .5f + 20f, size.y * .5f - 26f),
+                NewText(rt, header, 17, new Vector2(-size.x * .5f + 20f, size.y * .5f - 28f),
                     new Vector2(size.x - 40f, 28f), TextAnchor.MiddleLeft,
-                    headerColor ?? new Color(.82f, .90f, 1f), true);
+                    headerColor ?? new Color(.88f, .94f, 1f), true);
+
+                var divider = NewRect(rt, "Divider", new Vector2(0f, size.y * .5f - 46f),
+                    new Vector2(size.x - 40f, 1f));
+                divider.anchorMin = new Vector2(0f, 1f);
+                divider.anchorMax = new Vector2(0f, 1f);
+                divider.pivot = new Vector2(0f, 1f);
+                var dImg = divider.gameObject.AddComponent<Image>();
+                dImg.color = new Color(.12f, .58f, .95f, .3f);
+                dImg.raycastTarget = false;
             }
             return rt;
         }
