@@ -39,8 +39,8 @@ namespace SpaceMissionDesign.UI
         // Launch Complex 39A, Kennedy Space Center - the pad Apollo 11 left from
         // (28.5729 N, 80.6490 W). The Earth texture is mapped so this exact point
         // sits under the vehicle.
-        private const float SiteLatitude = 28.5729f;
-        private const float SiteLongitude = -80.6490f;
+        private const float SiteLatitude = 28.6084f;
+        private const float SiteLongitude = -80.6043f;
 
         // A real Saturn V (110 m) on this planet would be 0.02 units tall, so the vehicle
         // and its pad are exaggerated - but kept small enough that the planet reads as a
