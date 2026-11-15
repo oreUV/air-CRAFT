@@ -234,30 +234,77 @@ namespace SpaceMissionDesign.UI
 
         private static void Background(Transform parent)
         {
-            // Light full-screen tint: keeps the 3D scene visible.
-            var tint = NewRect(parent, "Background Tint", Vector2.zero, Vector2.zero);
-            tint.anchorMin = Vector2.zero;
-            tint.anchorMax = Vector2.one;
-            tint.offsetMin = Vector2.zero;
-            tint.offsetMax = Vector2.zero;
-            var tintImg = tint.gameObject.AddComponent<Image>();
-            tintImg.color = new Color(.02f, .03f, .06f, .16f);
-            tintImg.raycastTarget = false;
+            // ---- Deep-space full-screen backdrop ----
+            var backdrop = NewRect(parent, "Space Backdrop", Vector2.zero, Vector2.zero);
+            backdrop.anchorMin = Vector2.zero;
+            backdrop.anchorMax = Vector2.one;
+            backdrop.offsetMin = Vector2.zero;
+            backdrop.offsetMax = Vector2.zero;
+            var backImg = backdrop.gameObject.AddComponent<Image>();
+            backImg.color = new Color(.012f, .016f, .028f);
+            backImg.raycastTarget = false;
 
-            // Darker panel behind the left-half UI so text stays readable over the 3D view.
-            var panel = NewRect(parent, "Background Panel", Vector2.zero, new Vector2(960f, 1080f));
+            // Subtle vignette around edges.
+            var vignette = NewRect(parent, "Vignette", Vector2.zero, Vector2.zero);
+            vignette.anchorMin = Vector2.zero;
+            vignette.anchorMax = Vector2.one;
+            vignette.offsetMin = Vector2.zero;
+            vignette.offsetMax = Vector2.zero;
+            var vigImg = vignette.gameObject.AddComponent<Image>();
+            vigImg.color = new Color(0f, 0f, 0f, .45f);
+            vigImg.raycastTarget = false;
+
+            // Dark panel behind the left-half UI so text stays readable over the 3D view.
+            var panel = NewRect(parent, "UI Panel", Vector2.zero, new Vector2(960f, 1080f));
             panel.anchorMin = panel.anchorMax = new Vector2(0f, .5f);
             panel.pivot = new Vector2(0f, .5f);
             panel.anchoredPosition = Vector2.zero;
             panel.sizeDelta = new Vector2(960f, 1080f);
             var panelImg = panel.gameObject.AddComponent<Image>();
-            panelImg.color = new Color(.02f, .035f, .07f, .55f);
+            panelImg.color = new Color(.035f, .05f, .09f, .88f);
             panelImg.raycastTarget = false;
 
+            // Top accent bar.
+            var accent = NewRect(panel, "Accent Bar", new Vector2(0f, 460f), new Vector2(860f, 4f));
+            accent.anchorMin = new Vector2(.5f, 1f);
+            accent.anchorMax = new Vector2(.5f, 1f);
+            accent.pivot = new Vector2(.5f, 1f);
+            var accImg = accent.gameObject.AddComponent<Image>();
+            accImg.color = new Color(.24f, .60f, .95f);
+            accImg.raycastTarget = false;
+
             // Camera control hint on the 3D side of the screen.
-            NewText(parent, "Left-drag to move  ·  Right-drag to orbit  ·  Scroll to zoom  ·  Double-click to recentre", 15,
-                new Vector2(480f, -470f), new Vector2(960f, 30f), TextAnchor.MiddleCenter,
-                new Color(.55f, .68f, .86f));
+            NewText(parent, "LEFT-DRAG to move  ·  RIGHT-DRAG to orbit  ·  SCROLL to zoom  ·  DOUBLE-CLICK to recentre", 13,
+                new Vector2(900f, -480f), new Vector2(1000f, 24f), TextAnchor.MiddleCenter,
+                new Color(.45f, .55f, .70f));
+        }
+
+        /// <summary>
+        /// Draws a rounded-ish panel with a header, useful for grouping related controls.
+        /// </summary>
+        private static RectTransform Panel(Transform parent, string header, Vector2 pos, Vector2 size,
+            Color? headerColor = null)
+        {
+            var rt = NewRect(parent, "Panel", pos, size);
+            var img = rt.gameObject.AddComponent<Image>();
+            img.color = new Color(.06f, .09f, .15f, .92f);
+            img.raycastTarget = false;
+
+            // Subtle border.
+            var border = NewRect(rt, "Border", Vector2.zero, size + new Vector2(2f, 2f));
+            border.anchorMin = border.anchorMax = border.pivot = new Vector2(.5f, .5f);
+            border.anchoredPosition = Vector2.zero;
+            var bImg = border.gameObject.AddComponent<Image>();
+            bImg.color = new Color(.24f, .60f, .95f, .35f);
+            bImg.raycastTarget = false;
+
+            if (!string.IsNullOrEmpty(header))
+            {
+                NewText(rt, header, 17, new Vector2(-size.x * .5f + 20f, size.y * .5f - 26f),
+                    new Vector2(size.x - 40f, 28f), TextAnchor.MiddleLeft,
+                    headerColor ?? new Color(.82f, .90f, 1f), true);
+            }
+            return rt;
         }
 
         private void BeginScreen(string title, string subtitle = null)
