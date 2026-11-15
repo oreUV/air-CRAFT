@@ -1,14 +1,16 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 using SpaceMissionDesign.Data;
 
 namespace SpaceMissionDesign.UI
 {
     /// <summary>
-    /// Builds and animates the 3D mission scene: launch pad, a rocket assembled from the
-    /// supplied Tripo models (cockpit / fueltank1 / thruster1) with primitive fallbacks,
-    /// Earth/Moon backdrop, starfield, and an orbit camera.
+    /// Builds and animates the 3D mission scene: launch pad on Earth, the Saturn V rocket
+    /// (loaded from the supplied Saturn V.glb instead of individual parts), an Earth departure
+    /// sequence where the rocket climbs from the surface through clouds into space with Earth
+    /// receding below and the Moon ahead, an orbit camera, and a starfield.
     /// </summary>
     public sealed class Mission3DView : MonoBehaviour
     {
@@ -21,11 +23,20 @@ namespace SpaceMissionDesign.UI
         private Transform flame;
         private ParticleSystem exhaust;
         private Vector3 focusHome = new Vector3(10f, 12f, 0f);
-        private Material white, metal, dark, gold, blue, grey, red, pad, flag, earthMat, moonMat, flameMat, exhaustMat;
+        private Material white, metal, dark, gold, blue, grey, red, pad, flag, earthMat, moonMat, flameMat, exhaustMat, cloudMat;
 
-        // Rocket stack layout (world units), shared by the model placement and decorations.
-        // All heights scale the FBX models uniformly, so widths follow each part's own
-        // proportions — these constants only position things around the models.
+        // Earth departure visuals.
+        private Transform earthSphere;
+        private Transform cloudLayer;
+        private Transform moonSphere;
+        private GameObject starfieldGO;
+        private Texture2D earthTex;
+        private Texture2D cloudTex;
+        private float ascentAltitude;           // 0..1 progress of the departure climb
+        private Color surfaceSky = new Color(.45f, .68f, .92f);   // blue sky at the pad
+        private Color spaceSky = new Color(.012f, .014f, .025f);  // Near-black in orbit
+
+        // Rocket stack layout (world units), used for the pad and fallbacks only.
         private const float EngineH = 3.5f;
         private const float Stage1H = 14.4f;
         private const float Stage2H = 10.2f;
@@ -85,11 +96,43 @@ namespace SpaceMissionDesign.UI
             pad = Mat("Pad", TextureGenerator.Metal(), tint: new Color(.18f, .19f, .21f), .15f, .35f);
             flag = Mat("Flag", TextureGenerator.Flag(), tint: Color.white, 0f, .3f);
 
-            earthMat = Mat("Earth", TextureGenerator.Earth(), tint: Color.white, .02f, .2f, new Color(.01f, .04f, .09f));
+            // --- Earth textures from Downloads (Earth A = surface map, Earth B = cloud map) ---
+            earthTex = Resources.Load<Texture2D>("Textures/Earth (A)");
+            var earthBRaw = Resources.Load<Texture2D>("Textures/Earth (B)");
+            cloudTex = earthBRaw != null ? MakeCloudsFromMap(earthBRaw) : TextureGenerator.Clouds();
+
+            earthMat = Mat("Earth", earthTex ?? TextureGenerator.Earth(), tint: Color.white, .02f, .2f, new Color(.01f, .04f, .09f));
+            cloudMat = Mat("Clouds", cloudTex, tint: Color.white, 0f, .1f, null);
+            if (cloudMat.HasProperty("_Mode")) cloudMat.SetFloat("_Mode", 3f);        // transparent
+            if (cloudMat.HasProperty("_SrcBlend")) cloudMat.SetFloat("_SrcBlend", 1f); // one
+            if (cloudMat.HasProperty("_DstBlend")) cloudMat.SetFloat("_DstBlend", 10f); // one minus src alpha
+            if (cloudMat.HasProperty("_ZWrite")) cloudMat.SetFloat("_ZWrite", 0f);
+            cloudMat.renderQueue = 3000;
+
             moonMat = Mat("Moon", TextureGenerator.Moon(), tint: Color.white, .02f, .15f);
 
             flameMat = Mat("Flame", TextureGenerator.SoftDot(), tint: new Color(1f, .55f, .1f), 0f, .05f, new Color(1f, .4f, .05f) * 2.2f);
             exhaustMat = Mat("Exhaust", TextureGenerator.SoftDot(), tint: new Color(1f, .7f, .3f), 0f, .05f);
+        }
+
+        /// <summary>
+        /// Turns Earth (B)'s luminance into a cloud alpha map: bright areas become opaque
+        /// clouds, dark areas become transparent sky. Tiled and clamped.
+        /// </summary>
+        private static Texture2D MakeCloudsFromMap(Texture2D source)
+        {
+            var tex = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Repeat };
+            var src = source.GetPixels32();
+            var dst = new Color32[src.Length];
+            for (int i = 0; i < src.Length; i++)
+            {
+                float bright = (src[i].r + src[i].g + src[i].b) / 3f;
+                float alpha = Mathf.Clamp01((bright - .35f) * 2.2f);
+                dst[i] = new Color32(255, 255, 255, (byte)(alpha * 255f));
+            }
+            tex.SetPixels32(dst);
+            tex.Apply();
+            return tex;
         }
 
         private void BuildWorld()
@@ -104,25 +147,34 @@ namespace SpaceMissionDesign.UI
             sun.transform.rotation = Quaternion.Euler(48f, -35f, 0f);
             DontDestroyOnLoad(lightGO);
 
-            // Launch pad and ground — this IS the Earth surface we stand on.
+            // Launch pad — the Earth surface we stand on.
             Cylinder("Launch pad", new Vector3(10, -.5f, 0), 14f, .7f, pad, null);
             Cylinder("Pad ring", new Vector3(10, -.15f, 0), 8f, .35f, grey, null);
             Cylinder("Ground", new Vector3(10, -1.6f, 0), 90f, .4f, pad, null);
 
-            // Earth below and behind the pad: fills the horizon at launch, recedes as we rise.
-            Sphere("Earth", new Vector3(10, -42f, -90f), 96f, earthMat, null);
+            // Earth below: fills the horizon at launch, recedes as we rise.
+            earthSphere = Sphere("Earth", new Vector3(10, -42f, -90f), 96f, earthMat, null).transform;
+            earthSphere.gameObject.layer = LayerMask.NameToLayer("Default");
+
+            // Cloud layer: slightly larger than Earth, transparent, starts hidden.
+            cloudLayer = Sphere("Cloud layer", new Vector3(10, -42f, -90f), 106f, cloudMat, null).transform;
+            if (cloudLayer.TryGetComponent(out MeshRenderer cloudRend))
+                cloudRend.material = cloudMat; // ensure the transparent material is used
 
             // Moon ahead in the direction of flight, small at first, grows as we approach.
-            Sphere("Moon", new Vector3(10, 6f, 320f), 22f, moonMat, null);
+            moonSphere = Sphere("Moon", new Vector3(10, 6f, 320f), 22f, moonMat, null).transform;
 
             BuildStars();
+
+            // Start with the surface sky colour.
+            Camera.main.backgroundColor = surfaceSky;
         }
 
         private void BuildStars()
         {
-            var go = new GameObject("Starfield");
-            go.transform.position = new Vector3(0, 12, 0);
-            var ps = go.AddComponent<ParticleSystem>();
+            starfieldGO = new GameObject("Starfield");
+            starfieldGO.transform.position = new Vector3(0, 12, 0);
+            var ps = starfieldGO.AddComponent<ParticleSystem>();
             var main = ps.main;
             main.startSpeed = 0f;
             main.startLifetime = 9999f;
@@ -133,8 +185,6 @@ namespace SpaceMissionDesign.UI
             var emission = ps.emission;
             emission.enabled = false;
 
-            // A thin shell, not a solid ball: stars were previously spawning a few units from
-            // the camera and rendering as big hard squares.
             var shape = ps.shape;
             shape.shapeType = ParticleSystemShapeType.SphereShell;
             shape.radius = 200f;
@@ -145,13 +195,13 @@ namespace SpaceMissionDesign.UI
             if (psShader == null) psShader = Shader.Find("Sprites/Default");
             var psMat = new Material(psShader != null ? psShader : Shader.Find("Unlit/Color"));
             psMat.mainTexture = TextureGenerator.SoftDot();
-            if (psMat.HasProperty("_Color")) psMat.SetColor("_Color", new Color(.92f, .95f, 1f, 1f));
-            var renderer = go.GetComponent<ParticleSystemRenderer>();
+            if (psMat.HasProperty("_Color")) psMat.SetColor("_Color", new Color(.92f, .95f, 1f, 0f)); // start invisible
+            var renderer = starfieldGO.GetComponent<ParticleSystemRenderer>();
             renderer.material = psMat;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
             ps.Emit(1400);
 
-            DontDestroyOnLoad(go);
+            DontDestroyOnLoad(starfieldGO);
         }
 
         private void BuildCamera()
@@ -166,7 +216,7 @@ namespace SpaceMissionDesign.UI
                 DontDestroyOnLoad(go);
             }
             cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(.015f, .02f, .04f);
+            cam.backgroundColor = surfaceSky;
             cam.fieldOfView = 42f;
             cam.nearClipPlane = .1f;
             cam.farClipPlane = 600f;
@@ -200,33 +250,23 @@ namespace SpaceMissionDesign.UI
         // ---------------- model import ----------------
 
         /// <summary>
-        /// Instantiates a model prefab from Resources/Models, scales it uniformly so it is
-        /// <paramref name="height"/> tall, and aligns its bottom-centre to
-        /// <paramref name="at"/> (parent local space). Scaling is uniform so the supplied
-        /// meshes keep their real proportions.
-        /// Returns null when the asset is missing so callers can fall back to primitives.
+        /// Loads the Saturn V.glb rocket as a single complete model and places it on the
+        /// launch pad. The individual Saturn V FBX parts are kept in the project but are
+        /// NOT rendered — only the glb is used.
         /// </summary>
-        private Transform PlaceModel(GameObject prefab, Transform parent, Vector3 at,
-            float height, float yaw = 0f, Material tint = null)
+        private Transform PlaceSaturnVGlb(Transform parent, Vector3 at, float targetHeight)
         {
-            return PlaceModel(prefab, parent, at, height, out _, yaw, tint);
-        }
-
-        /// <summary>
-        /// As above, also reporting the placed height/width/depth in parent space so callers
-        /// that arrange several parts (engine clusters, boosters) can space them correctly
-        /// no matter what proportions the supplied model has.
-        /// </summary>
-        private Transform PlaceModel(GameObject prefab, Transform parent, Vector3 at,
-            float height, out Vector3 placedSize, float yaw = 0f, Material tint = null)
-        {
-            placedSize = Vector3.zero;
-            if (prefab == null) return null;
+            var prefab = Resources.Load<GameObject>("Models/Saturn V");
+            if (prefab == null)
+            {
+                Debug.LogWarning("Mission3DView: Saturn V.glb not found in Resources/Models, falling back to primitive rocket.");
+                return null;
+            }
 
             var go = Instantiate(prefab, parent);
-            go.name = prefab.name;
+            go.name = "Saturn V";
             go.transform.localPosition = Vector3.zero;
-            go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f);
+            go.transform.localRotation = Quaternion.identity;
             go.transform.localScale = Vector3.one;
 
             foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
@@ -234,52 +274,33 @@ namespace SpaceMissionDesign.UI
 
             if (!TryLocalBounds(go, parent, out var bounds)) return go.transform;
 
-            // The FBX axis conversion is inconsistent between Blender and Unity's importer,
-            // so orientation is normalised here from the mesh itself instead of trusting it.
+            // Stand the rocket up (longest axis = +Y) and make sure the base points down.
             var upright = AxisToUpRotation(bounds.size);
             if (upright != Quaternion.identity)
             {
-                go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * upright;
+                go.transform.localRotation = upright;
                 if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
             }
-
-            // Keep the working end down: heat shield, tank base, nozzle bell.
-            // The flip is applied in parent space, so it turns the part over rather than
-            // spinning it around whatever local axis happens to point up.
             if (WideEndIsUp(go))
             {
                 go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
                 if (TryLocalBounds(go, parent, out var flipped)) bounds = flipped;
             }
 
+            // Uniform scale so the rocket is targetHeight tall.
             float h = Mathf.Max(bounds.size.y, .0001f);
-
-            // Uniform scale: the prefab's own height/width ratio is preserved.
-            var scale = Vector3.one * (height / h);
+            var scale = Vector3.one * (targetHeight / h);
             go.transform.localScale = scale;
 
-            // Scaling happens about the object's own origin, so the parent-space bounds
-            // simply scale with it.
             Vector3 min = Vector3.Scale(bounds.min, scale);
             Vector3 max = Vector3.Scale(bounds.max, scale);
             Vector3 centre = (min + max) * .5f;
 
             go.transform.localPosition = at - new Vector3(centre.x, min.y, centre.z);
-            placedSize = max - min;
-
-            if (tint != null)
-                foreach (var r in go.GetComponentsInChildren<Renderer>()) r.sharedMaterial = tint;
 
             return go.transform;
         }
 
-        /// <summary>
-        /// True when the wider end of the model sits at the top. Compares how far vertices
-        /// spread around the vertical axis in the bottom and top 18% of the mesh, which is
-        /// what distinguishes a nozzle bell from a narrow throat, or a heat shield from a nose.
-        /// Returns false when vertex data is unavailable (mesh not marked readable), in which
-        /// case the bake convention (wide end down) is assumed to already be correct.
-        /// </summary>
         private static bool WideEndIsUp(GameObject go)
         {
             var points = new List<Vector3>(1024);
@@ -290,7 +311,7 @@ namespace SpaceMissionDesign.UI
 
                 Vector3[] vertices;
                 try { vertices = mesh.vertices; }
-                catch (UnityException) { return false; }   // not readable at runtime
+                catch (UnityException) { return false; }
 
                 var toWorld = mf.transform.localToWorldMatrix;
                 int step = Mathf.Max(1, vertices.Length / 500);
@@ -331,12 +352,6 @@ namespace SpaceMissionDesign.UI
             return highSpread > lowSpread * 1.12f;
         }
 
-        /// <summary>
-        /// Axis-aligned bounds of every mesh under <paramref name="go"/>, expressed in
-        /// <paramref name="space"/>'s local space. Computed from mesh data and the transform
-        /// matrices rather than <see cref="Renderer.bounds"/>, so the result is correct in the
-        /// same frame a rotation or scale is applied.
-        /// </summary>
         private static bool TryLocalBounds(GameObject go, Transform space, out Bounds bounds)
         {
             bounds = new Bounds();
@@ -366,7 +381,6 @@ namespace SpaceMissionDesign.UI
 
             if (has) return true;
 
-            // Fallback for renderers that are not plain MeshFilters (e.g. skinned meshes).
             var renderers = go.GetComponentsInChildren<Renderer>();
             if (renderers.Length == 0) return false;
 
@@ -387,130 +401,18 @@ namespace SpaceMissionDesign.UI
             return has;
         }
 
-        // ---------------- rocket assembly ----------------
-
-        /// <summary>
-        /// Loads a Saturn V part, orients it upright (longest axis = +Y, wide end down),
-        /// scales it uniformly so it is <paramref name="targetHeight"/> tall (with an optional
-        /// <paramref name="widthMult"/> to widen just X/Z), and stacks it so its bottom-centre
-        /// sits at <paramref name="at"/>. Returns the world y of the part's top so the next
-        /// part can be stacked directly above it.
-        /// </summary>
-        private float StackSaturnVPart(Dictionary<string, GameObject> parts, string name,
-            Transform parent, Vector3 at, float targetHeight, Material tint, float yaw = 0f,
-            Vector3 extraEuler = default, float widthMult = 1f)
-        {
-            if (!parts.TryGetValue(name, out var prefab) || prefab == null) return at.y;
-
-            var go = Instantiate(prefab, parent);
-            go.name = name;
-            go.transform.localPosition = Vector3.zero;
-            go.transform.localRotation = Quaternion.identity;
-            go.transform.localScale = Vector3.one;
-
-            foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
-            foreach (var anim in go.GetComponentsInChildren<Animator>()) Destroy(anim);
-
-            if (!TryLocalBounds(go, parent, out var bounds)) return at.y;
-
-            // --- Step 1: stand the part up (longest axis -> +Y) ---
-            var upright = AxisToUpRotation(bounds.size);
-            if (upright != Quaternion.identity)
-            {
-                go.transform.localRotation = upright;
-                if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
-            }
-
-            // --- Step 2: make sure the wide end (nozzle / base) points DOWN ---
-            if (WideEndIsUp(go))
-            {
-                go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
-                if (TryLocalBounds(go, parent, out var flipped)) bounds = flipped;
-            }
-
-            // --- Step 3: apply yaw (for fins around the stage) ---
-            if (yaw != 0f)
-                go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * go.transform.localRotation;
-
-            // --- Step 3b: apply any per-part extra rotation (e.g. flip S-IC bottom upside down) ---
-            if (extraEuler != Vector3.zero)
-                go.transform.localRotation = Quaternion.Euler(extraEuler) * go.transform.localRotation;
-
-            // Re-measure after all rotations.
-            TryLocalBounds(go, parent, out bounds);
-
-            // --- Step 4: scale so the part is targetHeight tall, then widen X/Z ---
-            float h = Mathf.Max(bounds.size.y, .0001f);
-            float sy = targetHeight / h;
-            float sxz = sy * widthMult;
-            go.transform.localScale = new Vector3(sxz, sy, sxz);
-
-            Vector3 min = Vector3.Scale(bounds.min, go.transform.localScale);
-            Vector3 max = Vector3.Scale(bounds.max, go.transform.localScale);
-            Vector3 centre = (min + max) * .5f;
-
-            go.transform.localPosition = at - new Vector3(centre.x, min.y, centre.z);
-
-            if (tint != null)
-                foreach (var r in go.GetComponentsInChildren<Renderer>()) r.sharedMaterial = tint;
-
-            return at.y + (max.y - min.y);
-        }
-
-        /// <summary>
-        /// Returns a rotation that maps the longest axis of <paramref name="size"/> to +Y.
-        /// If Y is already the longest axis, returns identity.
-        /// </summary>
         private static Quaternion AxisToUpRotation(Vector3 size)
         {
             float longest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
             if (longest <= size.y * 1.03f) return Quaternion.identity;
 
             if (size.x >= size.z)
-            {
-                // Longest on X: +X -> +Y (rotate around Z by +90°)
                 return Quaternion.Euler(0f, 0f, 90f);
-            }
             else
-            {
-                // Longest on Z: +Z -> +Y (rotate around X by -90°)
                 return Quaternion.Euler(-90f, 0f, 0f);
-            }
         }
 
-        /// <summary>
-        /// Orient-aware height of a part: rotates it upright, then reports the Y extent.
-        /// </summary>
-        private float OrientedHeight(GameObject prefab, Transform space)
-        {
-            if (prefab == null) return 0f;
-            var go = Instantiate(prefab, space);
-            go.transform.localPosition = Vector3.zero;
-            go.transform.localRotation = Quaternion.identity;
-            go.transform.localScale = Vector3.one;
-
-            foreach (var col in go.GetComponentsInChildren<Collider>()) Destroy(col);
-            foreach (var anim in go.GetComponentsInChildren<Animator>()) Destroy(anim);
-
-            float h = 0f;
-            if (TryLocalBounds(go, space, out var bounds))
-            {
-                var upright = AxisToUpRotation(bounds.size);
-                if (upright != Quaternion.identity)
-                {
-                    go.transform.localRotation = upright;
-                    if (TryLocalBounds(go, space, out var stood)) bounds = stood;
-                }
-                if (WideEndIsUp(go))
-                {
-                    go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
-                    if (TryLocalBounds(go, space, out var flipped)) bounds = flipped;
-                }
-                h = bounds.size.y;
-            }
-            Destroy(go);
-            return h;
-        }
+        // ---------------- rocket assembly ----------------
 
         public void Refresh(SpacecraftDesign design)
         {
@@ -522,147 +424,12 @@ namespace SpaceMissionDesign.UI
             root.position = new Vector3(10f, .18f, 0f);
             rocketRoot = root;
 
-            // --- Load all Saturn V parts (kept aside: the old Tripo models remain in
-            //     Assets/Resources/Models/ but are no longer loaded by the game) ---
-            var parts = new Dictionary<string, GameObject>();
-            foreach (var partName in new[] {
-                "S-IC bottom", "S-IC top",
-                "stage 1-2 coupler", "S-II", "S-IV b",
-                "service module", "lem shroud", "command moduel",
-                "escape tower", "fin (print 4)"
-            })
+            // --- Load the complete Saturn V.glb rocket (individual parts kept aside, not rendered) ---
+            var saturnV = PlaceSaturnVGlb(root, new Vector3(0, 0, 0), 28f);
+
+            // Fallback: primitive rocket if the glb is missing.
+            if (saturnV == null)
             {
-                var prefab = Resources.Load<GameObject>($"Models/SaturnV/{partName}");
-                if (prefab != null) parts[partName] = prefab;
-            }
-
-            bool usingSaturnV = parts.Count > 0;
-            if (!usingSaturnV)
-                Debug.Log("Mission3DView: no Saturn V models in Resources/Models/SaturnV, using primitive rocket.");
-
-            // --- Per-part target heights based on real Saturn V proportions ---
-            // Real heights (feet): S-IC 138, S-II 81.5, S-IVB 58.3, SM 24.6, CM 11.
-            // Scaled so the full stack is ~28 units tall, preserving each part's
-            // own aspect ratio (the STL files aren't proportionally consistent).
-            var partTargetHeight = new Dictionary<string, float>
-            {
-                {"S-IC bottom", 7.2f},
-                {"S-IC top", 4.0f},
-                {"stage 1-2 coupler", 0.9f},
-                {"S-II", 6.2f},
-                {"stage 1-2 coupler v2", 0.9f},
-                {"S-IV b", 4.6f},
-                {"lem shroud", 2.0f},
-                {"service module", 2.4f},
-                {"command moduel", 1.4f},
-                {"escape tower", 1.4f},
-            };
-
-            // --- Per-part extra rotation (degrees) applied after orientation ---
-            // S-IC bottom's nozzle bells point up in the source mesh; flip it so they point down.
-            var partExtraEuler = new Dictionary<string, Vector3>
-            {
-                {"S-IC bottom", new Vector3(180f, 0f, 0f)},
-                {"S-IC top", new Vector3(180f, 0f, 0f)},
-            };
-
-            // --- Per-part width multiplier (X/Z only) ---
-            var partWidthMult = new Dictionary<string, float>
-            {
-                // S-IC top width is computed below to match stage1Width exactly.
-                {"S-IC top", 1f},
-            };
-
-            // --- Stack the Saturn V from bottom to top ---
-            float y = 0f;
-            float stage1Width = 5.4f; // fallback
-            if (usingSaturnV)
-            {
-                // Measure S-IC bottom width for fin placement.
-                var go0 = Instantiate(parts["S-IC bottom"]);
-                go0.transform.localPosition = Vector3.zero;
-                go0.transform.localRotation = Quaternion.identity;
-                go0.transform.localScale = Vector3.one;
-                foreach (var col in go0.GetComponentsInChildren<Collider>()) Destroy(col);
-                foreach (var anim in go0.GetComponentsInChildren<Animator>()) Destroy(anim);
-                if (TryLocalBounds(go0, root, out var b0))
-                {
-                    var up0 = AxisToUpRotation(b0.size);
-                    if (up0 != Quaternion.identity)
-                    {
-                        go0.transform.localRotation = up0;
-                        if (TryLocalBounds(go0, root, out var b0s)) b0 = b0s;
-                    }
-                    if (WideEndIsUp(go0))
-                    {
-                        go0.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go0.transform.localRotation;
-                        if (TryLocalBounds(go0, root, out var b0f)) b0 = b0f;
-                    }
-                }
-                Destroy(go0);
-                float s0h = partTargetHeight["S-IC bottom"] / Mathf.Max(b0.size.y, .0001f);
-                stage1Width = Mathf.Max(b0.size.x, b0.size.z) * s0h;
-
-                // Compute S-IC top width multiplier so it matches stage1Width exactly.
-                float wMultTop = 1f;
-                var goW = Instantiate(parts["S-IC top"]);
-                goW.transform.localPosition = Vector3.zero;
-                goW.transform.localRotation = Quaternion.identity;
-                goW.transform.localScale = Vector3.one;
-                foreach (var col in goW.GetComponentsInChildren<Collider>()) Destroy(col);
-                foreach (var anim in goW.GetComponentsInChildren<Animator>()) Destroy(anim);
-                if (TryLocalBounds(goW, root, out var bw))
-                {
-                    var upW = AxisToUpRotation(bw.size);
-                    if (upW != Quaternion.identity)
-                    {
-                        goW.transform.localRotation = upW;
-                        if (TryLocalBounds(goW, root, out var bwS)) bw = bwS;
-                    }
-                    if (WideEndIsUp(goW))
-                    {
-                        goW.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * goW.transform.localRotation;
-                        if (TryLocalBounds(goW, root, out var bwF)) bw = bwF;
-                    }
-                    float sW = partTargetHeight["S-IC top"] / Mathf.Max(bw.size.y, .0001f);
-                    float naturalW = Mathf.Max(bw.size.x, bw.size.z) * sW;
-                    if (naturalW > .0001f) wMultTop = stage1Width / naturalW;
-                }
-                Destroy(goW);
-                partWidthMult["S-IC top"] = wMultTop;
-
-                y = StackSaturnVPart(parts, "S-IC bottom", root, new Vector3(0, y, 0), partTargetHeight["S-IC bottom"], white,
-                    extraEuler: partExtraEuler["S-IC bottom"]);
-                y = StackSaturnVPart(parts, "S-IC top", root, new Vector3(0, y, 0), partTargetHeight["S-IC top"], metal,
-                    extraEuler: partExtraEuler["S-IC top"], widthMult: partWidthMult["S-IC top"]);
-                y = StackSaturnVPart(parts, "stage 1-2 coupler", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler"], grey);
-                y = StackSaturnVPart(parts, "S-II", root, new Vector3(0, y, 0), partTargetHeight["S-II"], metal);
-                y = StackSaturnVPart(parts, "stage 1-2 coupler v2", root, new Vector3(0, y, 0), partTargetHeight["stage 1-2 coupler v2"], grey);
-                y = StackSaturnVPart(parts, "S-IV b", root, new Vector3(0, y, 0), partTargetHeight["S-IV b"], white);
-                // Lem shroud (SLA) covers the Lunar Module, sits above S-IVB / Instrument Unit.
-                y = StackSaturnVPart(parts, "lem shroud", root, new Vector3(0, y, 0), partTargetHeight["lem shroud"], dark);
-                // Service module sits above the SLA, command module on top of the service module.
-                y = StackSaturnVPart(parts, "service module", root, new Vector3(0, y, 0), partTargetHeight["service module"], blue);
-                y = StackSaturnVPart(parts, "command moduel", root, new Vector3(0, y, 0), partTargetHeight["command moduel"], white);
-                y = StackSaturnVPart(parts, "escape tower", root, new Vector3(0, y, 0), partTargetHeight["escape tower"], dark);
-
-                // --- Fins around the first stage ---
-                if (parts.ContainsKey("fin (print 4)"))
-                {
-                    float stage1Radius = stage1Width * .5f;
-                    for (int i = 0; i < 4; i++)
-                    {
-                        float a = i * Mathf.PI * .5f;
-                        float fr = stage1Radius + .12f;
-                        StackSaturnVPart(parts, "fin (print 4)", root,
-                            new Vector3(Mathf.Cos(a) * fr, .3f, Mathf.Sin(a) * fr),
-                            1.6f, grey, yaw: a * Mathf.Rad2Deg);
-                    }
-                }
-            }
-            else
-            {
-                // --- Primitive fallback (original Tripo models are kept aside, not deleted) ---
                 Cylinder("Stage 1", new Vector3(0, Stage1Base + Stage1H * .5f, 0), Stage1D * .5f, Stage1H, white, root);
                 Cylinder("Stage 2", new Vector3(0, Stage2Base + Stage2H * .5f, 0), Stage2D * .5f, Stage2H, metal, root);
                 Cylinder("Service module", new Vector3(0, ServiceBase + ServiceH * .5f, 0), ServiceD * .5f, ServiceH, metal, root);
@@ -671,77 +438,7 @@ namespace SpaceMissionDesign.UI
                 Sphere("Tower tip", new Vector3(0, StackTop + 1.25f, 0), .24f, dark, root);
             }
 
-            bool has = design != null;
-            bool Has(ComponentType t)
-            {
-                if (!has) return false;
-                foreach (var c in design.components) if (c.type == t) return true;
-                return false;
-            }
-
-            // --- Structure: external struts (around stage 1) ---
-            if (Has(ComponentType.Structure))
-            {
-                float r = stage1Width * .5f + .09f;
-                for (int i = 0; i < 4; i++)
-                {
-                    float a = i * Mathf.PI * .5f;
-                    Cylinder("Strut", new Vector3(Mathf.Cos(a) * r, 7f, Mathf.Sin(a) * r),
-                        .08f, Stage1H * .8f, grey, root);
-                }
-            }
-
-            // Service module mid-point (for add-ons).
-            float serviceMid = y - 12f;
-
-            // --- Power: fuel-cell boxes on the service module ---
-            if (Has(ComponentType.Power))
-            {
-                float x = stage1Width * .5f + .25f;
-                Cube("Fuel cell L", new Vector3(-x, serviceMid, 0), new Vector3(.5f, .9f, .8f), blue, root);
-                Cube("Fuel cell R", new Vector3(x, serviceMid, 0), new Vector3(.5f, .9f, .8f), blue, root);
-            }
-
-            // --- Communications: high-gain dish on a mast ---
-            if (Has(ComponentType.Communications))
-            {
-                float x = stage1Width * .5f + .15f;
-                Cylinder("Comm mast", new Vector3(x, serviceMid + .7f, 0), .06f, 1.1f, grey, root);
-                Sphere("Comm dish", new Vector3(x + .35f, serviceMid + 1.25f, 0), new Vector3(1f, .35f, 1f), metal, root);
-            }
-
-            // --- Thermal: radiator panels ---
-            if (Has(ComponentType.Thermal))
-            {
-                float x = stage1Width * .5f + .15f;
-                Cube("Radiator L", new Vector3(-x, serviceMid, 0), new Vector3(.12f, 1.4f, 1.1f), grey, root);
-                Cube("Radiator R", new Vector3(x, serviceMid, 0), new Vector3(.12f, 1.4f, 1.1f), grey, root);
-            }
-
-            // --- Instruments ring below the command module ---
-            if (has && design.instruments.Count > 0)
-            {
-                float yInst = y - 28f;
-                float r = stage1Width * .5f + .14f;
-                for (int i = 0; i < design.instruments.Count; i++)
-                {
-                    float a = i * Mathf.PI * 2f / Mathf.Max(1, design.instruments.Count);
-                    Cylinder("Instrument " + i, new Vector3(Mathf.Cos(a) * r, yInst, Mathf.Sin(a) * r),
-                        .2f, .5f, gold, root);
-                }
-            }
-
-            // --- Launch vehicle flavour ---
-            if (has && design.launchVehicle != null)
-            {
-                string id = design.launchVehicle.vehicleId;
-                if (id == "lv_saturn_v")
-                {
-                    // Saturn V selected: the stack already IS a Saturn V. No extra parts needed.
-                }
-            }
-
-            // Engine flame (hidden until liftoff) — sits at the base below S-IC bottom.
+            // Engine flame (hidden until liftoff) — sits at the base below the rocket.
             var flameGO = Cylinder("Engine flame", new Vector3(0, -3.4f, 0), 1.2f, 6f, flameMat, root);
             flame = flameGO.transform;
             flameBaseScale = flame.localScale;
@@ -810,13 +507,19 @@ namespace SpaceMissionDesign.UI
             var root = rocketRoot;
             float t = 0f;
             float ignition = .55f;
-            float launchDuration = 4.5f;
+            float launchDuration = 6f;
 
             // Camera departure: start on the surface looking up, end in orbit looking down at Earth.
             float startDist = cameraRig != null ? cameraRig.distance : 22f;
             float startPitch = cameraRig != null ? cameraRig.pitch : -25f;
-            float endDist = 62f;
-            float endPitch = 12f;
+            float endDist = 75f;
+            float endPitch = 15f;
+
+            // Earth departure start state.
+            Vector3 earthStartPos = earthSphere != null ? earthSphere.position : new Vector3(10, -42f, -90f);
+            Vector3 cloudStartPos = cloudLayer != null ? cloudLayer.position : new Vector3(10, -42f, -90f);
+            Vector3 moonStartPos = moonSphere != null ? moonSphere.position : new Vector3(10, 6f, 320f);
+            float moonStartScale = moonSphere != null ? moonSphere.localScale.x : 22f;
 
             if (flame != null) flame.gameObject.SetActive(true);
             if (exhaust != null)
@@ -831,6 +534,9 @@ namespace SpaceMissionDesign.UI
                 if (root == null) yield break;
 
                 float u = Mathf.Clamp01(t / launchDuration);
+                // Smoothstep for a more natural acceleration curve.
+                float s = u * u * (3f - 2f * u);
+                ascentAltitude = s;
 
                 // Flicker the flame cone.
                 if (flame != null)
@@ -841,23 +547,83 @@ namespace SpaceMissionDesign.UI
 
                 if (t > ignition)
                 {
-                    float s = t - ignition;
-                    float speed = s * s * 4.6f + s * 2.6f;
+                    float tt = t - ignition;
+                    float speed = tt * tt * 4.6f + tt * 2.6f;
                     root.position += Vector3.up * (speed * Time.deltaTime);
-                    root.Rotate(Vector3.up, 3f * Time.deltaTime, Space.World);
+                    root.Rotate(Vector3.up, 2f * Time.deltaTime, Space.World);
+                }
+
+                // --- Earth departure visuals ---
+                // Move Earth down (recede below) and scale it up so it stays filling the view.
+                if (earthSphere != null)
+                {
+                    float earthY = Mathf.Lerp(-42f, -140f, s);
+                    float earthScale = Mathf.Lerp(96f, 260f, s);
+                    earthSphere.position = earthStartPos + new Vector3(0f, earthY - earthStartPos.y, 0f);
+                    earthSphere.localScale = Vector3.one * earthScale;
+                }
+
+                // Cloud layer: follow Earth, become more opaque as we climb.
+                if (cloudLayer != null)
+                {
+                    cloudLayer.position = earthSphere != null ? earthSphere.position : cloudStartPos + new Vector3(0f, Mathf.Lerp(0f, -98f, s), 0f);
+                    float cloudAlpha = Mathf.Lerp(0f, .75f, s);
+                    var cloudRend = cloudLayer.GetComponent<MeshRenderer>();
+                    if (cloudRend != null && cloudRend.material != null)
+                    {
+                        Color c = cloudRend.material.color;
+                        c.a = cloudAlpha;
+                        cloudRend.material.color = c;
+                    }
+                    var cloudScale = Mathf.Lerp(106f, 280f, s);
+                    cloudLayer.localScale = Vector3.one * cloudScale;
+                }
+
+                // Sky: transition from surface blue to space black.
+                if (Camera.main != null)
+                {
+                    Camera.main.backgroundColor = Color.Lerp(surfaceSky, spaceSky, s);
+                }
+
+                // Stars: fade in as we reach space.
+                if (starfieldGO != null)
+                {
+                    var ps = starfieldGO.GetComponent<ParticleSystem>();
+                    if (ps != null)
+                    {
+                        var main = ps.main;
+                        var emission = ps.emission;
+                        emission.enabled = s > .35f;
+                        // Fade star alpha in.
+                        var renderer = starfieldGO.GetComponent<ParticleSystemRenderer>();
+                        if (renderer != null && renderer.material != null && renderer.material.HasProperty("_Color"))
+                        {
+                            Color c = renderer.material.color;
+                            c.a = Mathf.Lerp(0f, 1f, Mathf.Clamp01((s - .35f) / .65f));
+                            renderer.material.color = c;
+                        }
+                    }
+                }
+
+                // Moon: grows as we approach, stays ahead.
+                if (moonSphere != null)
+                {
+                    float moonZ = Mathf.Lerp(320f, 180f, s);
+                    float moonScale = Mathf.Lerp(22f, 45f, s);
+                    moonSphere.position = new Vector3(moonStartPos.x, moonStartPos.y, moonZ);
+                    moonSphere.localScale = Vector3.one * moonScale;
                 }
 
                 // --- Camera departure ---
                 // Pull back from the surface while tilting down to watch Earth recede.
                 if (cameraRig != null)
                 {
-                    cameraRig.distance = Mathf.Lerp(startDist, endDist, u);
+                    cameraRig.distance = Mathf.Lerp(startDist, endDist, s);
                     cameraRig.targetDistance = cameraRig.distance;
-                    cameraRig.pitch = Mathf.Lerp(startPitch, endPitch, u);
+                    cameraRig.pitch = Mathf.Lerp(startPitch, endPitch, s);
                     cameraRig.pitch = Mathf.Clamp(cameraRig.pitch, -20f, 85f);
 
-                    // Focus follows the vehicle up, slightly ahead of it.
-                    Vector3 focusTarget = root.position + new Vector3(0f, 6f, 0f);
+                    Vector3 focusTarget = root.position + new Vector3(0f, 8f, 0f);
                     focus.position = Vector3.Lerp(focus.position, focusTarget, Time.deltaTime * 2.5f);
                 }
 
@@ -874,6 +640,7 @@ namespace SpaceMissionDesign.UI
             // Hand control back to the user.
             launching = false;
             if (cameraRig != null) cameraRig.departing = false;
+            ascentAltitude = 1f;
         }
 
         // ---------------- primitive helpers ----------------

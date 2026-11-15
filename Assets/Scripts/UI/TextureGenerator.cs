@@ -389,5 +389,47 @@ namespace SpaceMissionDesign.UI
             tex.Apply();
             return tex;
         }
+
+        /// <summary>Procedural cloud layer: wispy white clouds on a transparent background.</summary>
+        public static Texture2D Clouds(int size = 1024)
+        {
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Repeat };
+            var px = new Color32[size * size];
+
+            // Start fully transparent.
+            for (int i = 0; i < px.Length; i++) px[i] = new Color32(255, 255, 255, 0);
+
+            // Wispy cloud streaks.
+            for (int s = 0; s < size * 3; s++)
+            {
+                int x = (int)Rnd(0, size);
+                int y = (int)Rnd(0, size);
+                int len = (int)Rnd(30, 180);
+                int thick = (int)Rnd(4, 14);
+                float angle = Rnd(0, Mathf.PI * 2f);
+                for (int i = 0; i < len; i++)
+                {
+                    int xi = Mathf.Clamp(x + (int)(Mathf.Cos(angle) * i), 0, size - 1);
+                    int yi = Mathf.Clamp(y + (int)(Mathf.Sin(angle) * i), 0, size - 1);
+                    for (int dy = -thick; dy <= thick; dy++)
+                        for (int dx = -thick; dx <= thick; dx++)
+                        {
+                            int x2 = Mathf.Clamp(xi + dx, 0, size - 1);
+                            int y2 = Mathf.Clamp(yi + dy, 0, size - 1);
+                            float dd = new Vector2(dx, dy).magnitude;
+                            if (dd > thick) continue;
+                            float fall = 1f - dd / thick;
+                            float alpha = fall * .65f * (1f - i / (float)len);
+                            var existing = px[y2 * size + x2];
+                            existing.a = (byte)Mathf.Max(existing.a, alpha * 255f);
+                            px[y2 * size + x2] = existing;
+                        }
+                }
+            }
+
+            tex.SetPixels32(px);
+            tex.Apply();
+            return tex;
+        }
     }
 }
