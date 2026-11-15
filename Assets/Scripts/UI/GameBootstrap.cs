@@ -275,7 +275,7 @@ namespace SpaceMissionDesign.UI
             accImg.raycastTarget = false;
 
             // Camera control hint on the 3D side of the screen.
-            NewText(parent, "RIGHT-DRAG orbit  -  MIDDLE-DRAG pan  -  SCROLL zoom  -  DOUBLE-CLICK recentre  -  1-7 TIME WARP", 13,
+            NewText(parent, "RIGHT-DRAG orbit  -  MIDDLE-DRAG pan  -  SCROLL zoom  -  WASD pitch/yaw  -  SHIFT boost  -  SPACE engine cut  -  1-7 TIME WARP", 13,
                 new Vector2(900f, -480f), new Vector2(1000f, 24f), TextAnchor.MiddleCenter,
                 new Color(.75f, .85f, .95f));
         }

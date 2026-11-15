@@ -89,6 +89,17 @@ namespace SpaceMissionDesign.UI
         private int warpIndex;
         private bool warpInSpace;
 
+        // Shift = hold to boost the thrust (up to 1.8x), Space = cut the engine (toggles).
+        // The vehicle coasts when the engine is cut; Shift spools it back up.
+        private float thrustMul = 1f;
+        private bool engineCut;
+
+        // Haze shell materials, kept so they can fade out once the vehicle climbs out of
+        // the atmosphere - seen from deep space they would otherwise stack and wash the
+        // whole planet pale.
+        private readonly List<Material> hazeMats = new List<Material>();
+        private readonly List<float> hazeAlpha = new List<float>();
+
         public float Warp => WarpSteps[Mathf.Clamp(warpIndex, 0, WarpSteps.Length - 1)];
 
         /// <summary>HUD line showing the current time compression and the available steps.</summary>
@@ -97,7 +108,7 @@ namespace SpaceMissionDesign.UI
             get
             {
                 string ladder = warpInSpace ? "1-4: 50 100 1000 10000" : "1-3: 1 2 5";
-                return $"TIME  {Warp:0}x      ({ladder})";
+                return $"TIME  {Warp:0}x  ({ladder})    THRUST {Mathf.RoundToInt(thrustMul * 100)}%{(engineCut ? "  ENGINE CUT" : "")}";
             }
         }
 
@@ -240,9 +251,13 @@ namespace SpaceMissionDesign.UI
             // The cloud map is white-on-black, so its luminance is converted into an
             // alpha coverage mask: the low deck keeps everything above a faint haze,
             // the high deck keeps only the dense cores and reads as thin cirrus.
-            cloudTex = cloudMap != null ? CloudsFromLuminance(cloudMap, .10f, .85f, "Cloud coverage") : null;
+            // The cloud map is full-range grayscale (mid-grey swirls, not sparse white on
+            // black), so the coverage window must sit in the upper half of the range.
+            // The old .10-.85 window turned almost the whole map into opaque white and
+            // painted a solid white shell over the planet.
+            cloudTex = cloudMap != null ? CloudsFromLuminance(cloudMap, .38f, .82f, "Cloud coverage") : null;
             if (cloudTex == null) cloudTex = CloudField(512, 6, 6f, .50f, .20f);   // fallback
-            var cirrusTex = cloudMap != null ? CloudsFromLuminance(cloudMap, .48f, 1f, "Cirrus coverage") : null;
+            var cirrusTex = cloudMap != null ? CloudsFromLuminance(cloudMap, .55f, .95f, "Cirrus coverage") : null;
             if (cirrusTex == null) cirrusTex = CloudField(512, 5, 5f, .42f, .32f);
 
             // A touch of self-illumination keeps the day map readable on the side of the
@@ -872,9 +887,9 @@ namespace SpaceMissionDesign.UI
             // Thicknesses chosen so the camera at the pad is INSIDE all of them (a haze
             // dome overhead, not a band across the sky) and each one is left behind in
             // turn on the way up.
-            AddShell("Atmosphere - troposphere", EarthR + 14f, new Color(.72f, .86f, 1f, .055f), 2990);
-            AddShell("Atmosphere - stratosphere", EarthR + 260f, new Color(.48f, .70f, 1f, .05f), 2991);
-            AddShell("Atmosphere - exosphere", EarthR + 820f, new Color(.32f, .52f, .95f, .045f), 2992);
+            AddShell("Atmosphere - troposphere", EarthR + 14f, new Color(.72f, .86f, 1f, .040f), 2990);
+            AddShell("Atmosphere - stratosphere", EarthR + 260f, new Color(.48f, .70f, 1f, .032f), 2991);
+            AddShell("Atmosphere - exosphere", EarthR + 820f, new Color(.32f, .52f, .95f, .026f), 2992);
         }
 
         private void AddShell(string name, float radius, Color tint, int queue)
@@ -886,6 +901,8 @@ namespace SpaceMissionDesign.UI
             if (s == null) s = Shader.Find("Standard");
             var mat = new Material(s) { name = name };
             SetTransparent(mat, tint, queue);
+            hazeMats.Add(mat);
+            hazeAlpha.Add(tint.a);
             Planet(name, EarthCenter, radius, mat);
         }
 
@@ -1339,6 +1356,8 @@ namespace SpaceMissionDesign.UI
             flightSpeed = 0f;
             warpIndex = 0;
             warpInSpace = false;
+            thrustMul = 1f;
+            engineCut = false;
             if (flame != null) flame.gameObject.SetActive(false);
             if (exhaust != null)
             {
@@ -1456,9 +1475,16 @@ namespace SpaceMissionDesign.UI
 
             if (!InFlight) return;
 
+            // Engine cut / boost: Space toggles the engine off, Shift spools it up.
+            if (Input.GetKeyDown(KeyCode.Space)) engineCut = !engineCut;
+            float wantMul = engineCut ? .1f
+                : (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift)) ? 1.8f : 1f;
+            thrustMul = Mathf.MoveTowards(thrustMul, wantMul, 1.5f * Time.deltaTime);
+
             UpdateWarp();
             phaseElapsed += Time.deltaTime;
             StepFlight();
+            if (engineCut) SetBurn(false);
 
             DriveCinematicCamera(AltitudeUnits);
 
@@ -1502,6 +1528,18 @@ namespace SpaceMissionDesign.UI
                 Color gc = groundMat.color;
                 gc.a = 1f - Mathf.Clamp01((alt - 90f) / 170f);
                 groundMat.color = gc;
+            }
+
+            // Haze shells thin out with altitude and are gone by the time the vehicle is
+            // in deep space, so the planet never looks milky from orbit.
+            float hazeFade = 1f - Mathf.Clamp01((alt - 220f) / 650f);
+            for (int i = 0; i < hazeMats.Count; i++)
+            {
+                Material hm = hazeMats[i];
+                if (hm == null || !hm.HasProperty("_Color")) continue;
+                Color hc = hm.color;
+                hc.a = hazeAlpha[i] * hazeFade;
+                hm.color = hc;
             }
 
             UpdateEngineVisuals();
@@ -1632,6 +1670,9 @@ namespace SpaceMissionDesign.UI
             // The frame delta is clamped: a stall at 10000x would otherwise multiply a
             // one-second hitch into a jump across the whole solar system.
             float dt = Mathf.Min(Time.deltaTime, .05f) * Warp;
+            // Movement uses the warped clock scaled by the player throttle; phase timers
+            // keep the plain warped clock so sequence logic is unaffected.
+            float mv = dt * thrustMul;
             Vector3 toMoon = (MoonCenter - EarthCenter).normalized;
             Vector3 upNow = (pos - EarthCenter).normalized;
             float alt = (pos - EarthCenter).magnitude - EarthR - PadTop;
@@ -1695,7 +1736,7 @@ namespace SpaceMissionDesign.UI
                     float turn = Mathf.Clamp01((alt - turnStartAlt) / (AtmosphereTop - turnStartAlt));
                     flightDir = Vector3.Slerp(Vector3.up, toMoon, turn).normalized;
 
-                    pos += flightDir * (flightSpeed * dt);
+                    pos += flightDir * (flightSpeed * mv);
 
                     if (alt >= AtmosphereTop)
                     {
@@ -1712,7 +1753,7 @@ namespace SpaceMissionDesign.UI
                     // star streak. Time compression is what covers this leg: at 50x the
                     // crossing is minutes, at 1000x it is seconds.
                     flightSpeed = 2f;
-                    AdvanceToward(ref pos, MoonCenter, flightSpeed, dt);
+                    AdvanceToward(ref pos, MoonCenter, flightSpeed, mv);
 
                     float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
                     if (distMoonSurf < 850f)
@@ -1728,7 +1769,7 @@ namespace SpaceMissionDesign.UI
                     float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
                     float brake = Mathf.Clamp01(1f - distMoonSurf / 850f);
                     flightSpeed = Mathf.Lerp(2f, .6f, brake * brake);
-                    AdvanceToward(ref pos, MoonCenter, flightSpeed, dt);
+                    AdvanceToward(ref pos, MoonCenter, flightSpeed, mv);
 
                     if (distMoonSurf < 60f)
                     {
@@ -1774,7 +1815,7 @@ namespace SpaceMissionDesign.UI
                     {
                         flightSpeed = Mathf.Min(flightSpeed + .8f * dt, 2f);
                     }
-                    AdvanceToward(ref pos, home, flightSpeed, dt);
+                    AdvanceToward(ref pos, home, flightSpeed, mv);
 
                     if (distHomeSurf < 120f)
                     {
@@ -1788,7 +1829,7 @@ namespace SpaceMissionDesign.UI
                 {
                     float altHome = (pos - EarthCenter).magnitude - EarthR - PadTop;
                     flightSpeed = Mathf.Max(flightSpeed - 1.2f * dt, .5f);
-                    AdvanceToward(ref pos, EarthCenter, flightSpeed, dt);
+                    AdvanceToward(ref pos, EarthCenter, flightSpeed, mv);
 
                     if (altHome <= .5f)
                     {
@@ -2059,6 +2100,12 @@ namespace SpaceMissionDesign.UI
             if (Input.GetKey(KeyCode.UpArrow)) pitch += keyOrbitSpeed * dt;
             if (Input.GetKey(KeyCode.DownArrow)) pitch -= keyOrbitSpeed * dt;
 
+            // --- WASD does the same job for players who prefer the home row ---
+            if (Input.GetKey(KeyCode.W)) pitch += keyOrbitSpeed * dt;
+            if (Input.GetKey(KeyCode.S)) pitch -= keyOrbitSpeed * dt;
+            if (Input.GetKey(KeyCode.A)) yaw -= keyOrbitSpeed * dt;
+            if (Input.GetKey(KeyCode.D)) yaw += keyOrbitSpeed * dt;
+
             // --- pan: MIDDLE mouse button drag ---
             panning = Input.GetMouseButton(2);
             if (panning)
@@ -2104,6 +2151,8 @@ namespace SpaceMissionDesign.UI
                    Mathf.Abs(Input.mouseScrollDelta.y) > .01f ||
                    Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.RightArrow) ||
                    Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.DownArrow) ||
+                   Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.D) ||
+                   Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift) || Input.GetKey(KeyCode.Space) ||
                    Input.GetKey(KeyCode.Equals) || Input.GetKey(KeyCode.Minus) ||
                    Input.GetKey(KeyCode.KeypadPlus) || Input.GetKey(KeyCode.KeypadMinus);
         }
