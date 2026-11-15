@@ -275,7 +275,7 @@ namespace SpaceMissionDesign.UI
             accImg.raycastTarget = false;
 
             // Camera control hint on the 3D side of the screen.
-            NewText(parent, "RIGHT-DRAG orbit  -  MIDDLE-DRAG pan  -  SCROLL zoom  -  DOUBLE-CLICK recentre", 13,
+            NewText(parent, "RIGHT-DRAG orbit  -  MIDDLE-DRAG pan  -  SCROLL zoom  -  DOUBLE-CLICK recentre  -  1-7 TIME WARP", 13,
                 new Vector2(900f, -480f), new Vector2(1000f, 24f), TextAnchor.MiddleCenter,
                 new Color(.75f, .85f, .95f));
         }
@@ -639,7 +639,7 @@ namespace SpaceMissionDesign.UI
                 new Vector2(-500, -170), new Vector2(880, 44), TextAnchor.MiddleCenter, new Color(1f, .82f, .45f), true);
 
             // Flight HUD (top-right, over the 3D view), updated every frame.
-            flightHud = NewText(canvas.transform, "", 17, new Vector2(400, 440), new Vector2(520, 34),
+            flightHud = NewText(canvas.transform, "", 17, new Vector2(400, 440), new Vector2(520, 56),
                 TextAnchor.UpperRight, new Color(.75f, .9f, 1f), true);
 
             // Skip button while the flight plays out.
@@ -656,7 +656,7 @@ namespace SpaceMissionDesign.UI
             var view = Mission3DView.Instance;
             if (view == null) { flightHud.enabled = false; return; }
             flightHud.enabled = view.InFlight || view.CurrentPhase == Mission3DView.FlightPhase.Complete;
-            if (flightHud.enabled) flightHud.text = view.FlightStatus;
+            if (flightHud.enabled) flightHud.text = view.FlightStatus + "\n" + view.WarpStatus;
         }
 
         private void ShowResults()

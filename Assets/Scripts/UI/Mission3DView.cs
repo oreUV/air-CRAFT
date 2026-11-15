@@ -78,6 +78,29 @@ namespace SpaceMissionDesign.UI
         private Vector3 flightDir = Vector3.up;
         private float flightSpeed;
 
+        // ---------------- time warp ----------------
+        // Inside the atmosphere the clock can only be nudged (1x / 2x / 5x) - a launch is
+        // meant to be watched. Above AtmosphereTop the cruise is compressed instead:
+        // 50x / 100x / 1000x / 10000x. Keys 1-7 pick a step (clamped to the ladder that is
+        // valid at the current altitude), T cycles through that ladder.
+        public const float AtmosphereTop = 900f;          // ~100 km, the edge of space
+        private static readonly float[] WarpSteps = { 1f, 2f, 5f, 50f, 100f, 1000f, 10000f };
+        private const int WarpInAtmosphereCount = 3;
+        private int warpIndex;
+        private bool warpInSpace;
+
+        public float Warp => WarpSteps[Mathf.Clamp(warpIndex, 0, WarpSteps.Length - 1)];
+
+        /// <summary>HUD line showing the current time compression and the available steps.</summary>
+        public string WarpStatus
+        {
+            get
+            {
+                string ladder = warpInSpace ? "1-4: 50 100 1000 10000" : "1-3: 1 2 5";
+                return $"TIME  {Warp:0}x      ({ladder})";
+            }
+        }
+
         private static readonly Color surfaceSky = new Color(.45f, .68f, .92f);
         private static readonly Color spaceSky = new Color(.012f, .014f, .025f);
 
@@ -364,7 +387,7 @@ namespace SpaceMissionDesign.UI
             // is UV-mapped so the point under the pad is LC-39A on the real Earth map.
             // Drawn two units down so the sharp local ground cap sits exactly on top of
             // it without either surface z-fighting.
-            earthSphere = Planet("Earth", EarthCenter, EarthR - 2f, earthMat, 192, 96).transform;
+            earthSphere = Planet("Earth", EarthCenter, EarthR - 2f, earthMat, 256, 128).transform;
 
             BuildGroundPatch();
 
@@ -390,7 +413,7 @@ namespace SpaceMissionDesign.UI
 
             // Moon: fixed far ahead along the flight path, mapped with the real lunar
             // south-up-free equirectangular image (north at +Y).
-            moonSphere = EquirectGlobe("Moon", MoonCenter, MoonR, moonMat, 128, 64).transform;
+            moonSphere = EquirectGlobe("Moon", MoonCenter, MoonR, moonMat, 192, 96).transform;
             // The map is centred on selenographic 0 degrees, i.e. the middle of the near
             // side, so it is turned to face the approaching vehicle (which comes in along
             // -Z); the maria then read exactly like the Apollo photographs.
@@ -1309,6 +1332,8 @@ namespace SpaceMissionDesign.UI
             phaseElapsed = 0f;
             flightDir = Vector3.up;
             flightSpeed = 0f;
+            warpIndex = 0;
+            warpInSpace = false;
             if (flame != null) flame.gameObject.SetActive(false);
             if (exhaust != null)
             {
@@ -1426,6 +1451,7 @@ namespace SpaceMissionDesign.UI
 
             if (!InFlight) return;
 
+            UpdateWarp();
             phaseElapsed += Time.deltaTime;
             StepFlight();
 
@@ -1516,7 +1542,7 @@ namespace SpaceMissionDesign.UI
 
                 case FlightPhase.Ascent:
                 {
-                    float climb = Mathf.Clamp01(alt / 650f);
+                    float climb = Mathf.Clamp01(alt / AtmosphereTop);
                     cameraRig.cinematicPitch = Mathf.Lerp(3f, 42f, climb);
                     cameraRig.cinematicYaw = 55f + climb * 25f;
                     cameraRig.cinematicDistance = Mathf.Lerp(30f, 200f, climb * climb);
@@ -1566,10 +1592,39 @@ namespace SpaceMissionDesign.UI
             return Color.Lerp(edge, spaceSky, Mathf.Clamp01((alt - 820f) / 480f));
         }
 
+        /// <summary>
+        /// Picks the time compression for this frame. The ladder changes when the vehicle
+        /// crosses the top of the atmosphere, because that is the point where compressing
+        /// time stops spoiling the launch and starts being useful.
+        /// </summary>
+        private void UpdateWarp()
+        {
+            bool space = AltitudeUnits >= AtmosphereTop;
+            if (space != warpInSpace)
+            {
+                warpInSpace = space;
+                warpIndex = space ? WarpInAtmosphereCount : 0;
+            }
+
+            int lo = warpInSpace ? WarpInAtmosphereCount : 0;
+            int hi = warpInSpace ? WarpSteps.Length - 1 : WarpInAtmosphereCount - 1;
+
+            for (int i = 0; i < WarpSteps.Length; i++)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha1 + i) || Input.GetKeyDown(KeyCode.Keypad1 + i))
+                    warpIndex = Mathf.Clamp(i, lo, hi);
+            }
+
+            if (Input.GetKeyDown(KeyCode.T))
+                warpIndex = warpIndex >= hi ? lo : warpIndex + 1;
+        }
+
         private void StepFlight()
         {
             var pos = rocketRoot.position;
-            float dt = Time.deltaTime;
+            // Everything that moves advances on the warped clock; the countdown and the
+            // ignition sequence keep real time so liftoff is never fast-forwarded.
+            float dt = Time.deltaTime * Warp;
             Vector3 toMoon = (MoonCenter - EarthCenter).normalized;
             Vector3 upNow = (pos - EarthCenter).normalized;
             float alt = (pos - EarthCenter).magnitude - EarthR - PadTop;
@@ -1620,33 +1675,36 @@ namespace SpaceMissionDesign.UI
 
                 case FlightPhase.Ascent:
                 {
-                    // Continuous acceleration off the pad; pitch over toward the Moon
-                    // between turnStartAlt and turnFullAlt (classic gravity turn).
-                    // Thrust builds over the first seconds, so the vehicle starts slowly
-                    // and only then gains real speed - a liftoff, not a teleport.
-                    const float turnStartAlt = 50f, turnFullAlt = 620f;
-                    float climb = Mathf.Clamp01(alt / turnFullAlt);
-                    float speedCap = Mathf.Lerp(14f, 210f, climb * climb);
-                    flightSpeed = Mathf.Min(flightSpeed + 18f * dt, speedCap);
+                    // Real ascent pacing. The stack leaves the pad at about 2 units/s and
+                    // accelerates as the air thins, reaching ~20 units/s at the top of the
+                    // atmosphere - which is roughly two minutes of flight at 1x, the same
+                    // time the real Saturn V took to clear 100 km. No hidden speed ramp:
+                    // what you see is the vehicle travelling at that speed.
+                    const float turnStartAlt = 60f;
+                    float speedCap = 2f + .020f * alt;
+                    flightSpeed = Mathf.Min(flightSpeed + 1.2f * dt, speedCap);
 
-                    float turn = Mathf.Clamp01((alt - turnStartAlt) / (turnFullAlt - turnStartAlt));
+                    // Pitch over toward the Moon through the upper atmosphere (gravity turn).
+                    float turn = Mathf.Clamp01((alt - turnStartAlt) / (AtmosphereTop - turnStartAlt));
                     flightDir = Vector3.Slerp(Vector3.up, toMoon, turn).normalized;
 
                     pos += flightDir * (flightSpeed * dt);
 
-                    if (turn >= 1f)
+                    if (alt >= AtmosphereTop)
                     {
                         phase = FlightPhase.TransitToMoon;
                         phaseElapsed = 0f;
+                        flightSpeed = 6f;
                     }
                     break;
                 }
 
                 case FlightPhase.TransitToMoon:
                 {
-                    flightSpeed = 430f;
-                    flightDir = (MoonCenter - pos).normalized;
-                    pos += flightDir * (flightSpeed * dt);
+                    // A slow coast on purpose. This is the leg the time warp exists for:
+                    // at 50x the crossing takes ~18 s, at 1000x it is over in under a second.
+                    flightSpeed = 6f;
+                    AdvanceToward(ref pos, MoonCenter, flightSpeed, dt);
 
                     float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
                     if (distMoonSurf < 850f)
@@ -1661,9 +1719,8 @@ namespace SpaceMissionDesign.UI
                 {
                     float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
                     float brake = Mathf.Clamp01(1f - distMoonSurf / 850f);
-                    flightSpeed = Mathf.Lerp(430f, 55f, brake * brake);
-                    flightDir = (MoonCenter - pos).normalized;
-                    pos += flightDir * (flightSpeed * dt);
+                    flightSpeed = Mathf.Lerp(6f, 1.2f, brake * brake);
+                    AdvanceToward(ref pos, MoonCenter, flightSpeed, dt);
 
                     if (distMoonSurf < 60f)
                     {
@@ -1689,7 +1746,7 @@ namespace SpaceMissionDesign.UI
                     {
                         phase = FlightPhase.ReturnToEarth;
                         phaseElapsed = 0f;
-                        flightSpeed = 60f;
+                        flightSpeed = 2f;
                         SetBurn(true);
                     }
                     break;
@@ -1703,13 +1760,13 @@ namespace SpaceMissionDesign.UI
                     if (distHomeSurf < 900f)
                     {
                         float brake = Mathf.Clamp01(1f - distHomeSurf / 900f);
-                        flightSpeed = Mathf.Max(Mathf.Lerp(430f, 26f, brake * brake), 18f);
+                        flightSpeed = Mathf.Max(Mathf.Lerp(6f, .8f, brake * brake), .8f);
                     }
                     else
                     {
-                        flightSpeed = Mathf.Min(flightSpeed + 300f * dt, 430f);
+                        flightSpeed = Mathf.Min(flightSpeed + 2f * dt, 6f);
                     }
-                    pos += flightDir * (flightSpeed * dt);
+                    AdvanceToward(ref pos, home, flightSpeed, dt);
 
                     if (distHomeSurf < 120f)
                     {
@@ -1722,9 +1779,8 @@ namespace SpaceMissionDesign.UI
                 case FlightPhase.EarthArrival:
                 {
                     float altHome = (pos - EarthCenter).magnitude - EarthR - PadTop;
-                    flightSpeed = Mathf.Max(flightSpeed - 90f * dt, 10f);
-                    Vector3 descend = (EarthCenter - pos).normalized;
-                    pos += descend * (flightSpeed * dt);
+                    flightSpeed = Mathf.Max(flightSpeed - 1.2f * dt, .8f);
+                    AdvanceToward(ref pos, EarthCenter, flightSpeed, dt);
 
                     if (altHome <= .5f)
                     {
@@ -1752,6 +1808,35 @@ namespace SpaceMissionDesign.UI
             {
                 Quaternion want = Quaternion.FromToRotation(Vector3.up, flightDir);
                 rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-2.2f * dt));
+            }
+        }
+
+        /// <summary>
+        /// Moves <paramref name="pos"/> toward <paramref name="target"/> by at most
+        /// <paramref name="speed"/> * <paramref name="dt"/>, split into bounded substeps.
+        /// At 10000x a single frame would otherwise jump thousands of units and could skip
+        /// the phase boundary it was meant to cross (a fly-by that never registers as an
+        /// arrival). The cap keeps each step local so the boundary is always detected.
+        /// </summary>
+        private static void AdvanceToward(ref Vector3 pos, Vector3 target, float speed, float dt)
+        {
+            float remaining = speed * dt;
+            if (remaining <= 0f) return;
+
+            const float maxStep = 60f;
+            int guard = 0;
+            while (remaining > 0f && guard++ < 512)
+            {
+                float step = Mathf.Min(remaining, maxStep);
+                Vector3 toTarget = target - pos;
+                float dist = toTarget.magnitude;
+                if (dist <= step)
+                {
+                    pos = target;
+                    return;
+                }
+                pos += (toTarget / dist) * step;
+                remaining -= step;
             }
         }
 
