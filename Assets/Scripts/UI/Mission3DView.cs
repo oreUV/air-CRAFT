@@ -17,6 +17,8 @@ namespace SpaceMissionDesign.UI
         private Transform rocketRoot;
         private Transform focus;
         private OrbitCamera cameraRig;
+        private Camera rigCamera;
+        private float nextCameraAudit;
         private Vector3 flameBaseScale = Vector3.one;
         private Transform flame;
         private ParticleSystem exhaust;
@@ -78,6 +80,29 @@ namespace SpaceMissionDesign.UI
         /// One-time render diagnostic. Logs which camera renders, which camera we drive,
         /// and whether the key objects are visible / in front of the camera.
         /// </summary>
+        /// <summary>
+        /// Keeps exactly one camera rendering: ours, at the highest depth. Re-checked twice
+        /// a second because a scene camera can appear after startup.
+        /// </summary>
+        private void EnforceSingleCamera()
+        {
+            if (rigCamera == null) return;
+            if (Time.unscaledTime < nextCameraAudit) return;
+            nextCameraAudit = Time.unscaledTime + .5f;
+
+            if (!rigCamera.enabled) rigCamera.enabled = true;
+            if (rigCamera.depth < 100f) rigCamera.depth = 100f;
+
+            var cams = Camera.allCameras;
+            for (int i = 0; i < cams.Length; i++)
+            {
+                var c = cams[i];
+                if (c == null || c == rigCamera) continue;
+                c.enabled = false;
+                Debug.LogWarning($"Mission3DView: disabled extra camera '{c.name}' - it was drawing over the 3D view.");
+            }
+        }
+
         private void DumpDiagnostics()
         {
             var cam = Camera.main;
@@ -323,21 +348,17 @@ namespace SpaceMissionDesign.UI
             cam.nearClipPlane = .3f;
             cam.farClipPlane = 9000f; // reaches the Moon and the star shell
 
-            // Ensure exactly ONE camera renders the game view, and it covers the whole screen.
-            // A second enabled camera (e.g. a leftover scene camera) would draw over ours and
-            // make the orbiting camera appear frozen.
-            foreach (var other in Camera.allCameras)
-            {
-                if (other != cam)
-                {
-                    Debug.LogWarning($"Mission3DView: disabling extra camera '{other.name}' so the 3D scene renders.");
-                    other.enabled = false;
-                }
-            }
+            // This camera must be the ONLY one drawing the game view, and must draw last.
+            // A second enabled camera (e.g. a scene camera named "Camera") with a higher
+            // depth renders an opaque frame over ours, freezing the visible picture even
+            // though our camera is orbiting correctly.
+            rigCamera = cam;
+            cam.depth = 100f;
             cam.enabled = true;
             cam.cullingMask = ~0;
             cam.rect = new Rect(0f, 0f, 1f, 1f);
             cam.targetTexture = null;
+            EnforceSingleCamera();
 
             var focusGO = new GameObject("Camera Focus");
             focusGO.transform.position = focusHome;
@@ -628,6 +649,7 @@ namespace SpaceMissionDesign.UI
 
         private void Update()
         {
+            EnforceSingleCamera();
             if (rocketRoot == null) return;
 
             // Camera focus chases the rocket the whole time so the player can orbit freely.

@@ -184,7 +184,7 @@ namespace SpaceMissionDesign.Game
         public double missionLifetimeDays;
         public double score;
         public List<string> feedbackMessages = new List<string>();
-        public Dictionary<string, double> constraintMargins = new Dictionary<string, double>();
+        [System.NonSerialized] public Dictionary<string, double> constraintMargins = new Dictionary<string, double>();
 
         public SimulationResult() { }
     }
