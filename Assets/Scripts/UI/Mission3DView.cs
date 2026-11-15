@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using SpaceMissionDesign.Data;
@@ -10,28 +9,42 @@ namespace SpaceMissionDesign.UI
     {
         public static Mission3DView Instance { get; private set; }
 
+        /// <summary>Fired once when the full Earth->Moon->Earth flight completes (or is skipped).</summary>
+        public static Action MissionComplete;
+
+        public enum FlightPhase { PreLaunch, Ascent, TransitToMoon, MoonArrival, MoonStay, ReturnToEarth, EarthArrival, Complete }
+
         private Transform rocketRoot;
         private Transform focus;
         private OrbitCamera cameraRig;
         private Vector3 flameBaseScale = Vector3.one;
         private Transform flame;
         private ParticleSystem exhaust;
-        private Vector3 focusHome = new Vector3(10f, 12f, 0f);
+        private Vector3 focusHome = new Vector3(10f, 14f, 0f);
         private Material white, metal, dark, gold, blue, grey, red, pad, flag, earthMat, moonMat, flameMat, exhaustMat, cloudMat;
 
-        // Earth departure / Moon round-trip visuals.
+        // ---------------- world layout (all fixed; the rocket travels through it) ----------------
+        private static readonly Vector3 EarthCenter = new Vector3(10f, -300f, 0f);
+        private const float EarthR = 300f;        // surface at y = 0 under the pad
+        private const float CloudShellR = 322f;   // clouds pass by at ~22 units altitude
+        private const float AtmoFadeStart = 14f;  // sky starts losing blue
+        private const float AtmoFadeEnd = 150f;   // fully space-black here
+        private static readonly Vector3 MoonCenter = new Vector3(10f, 260f, 2900f);
+        private const float MoonR = 240f;
+
         private Transform earthSphere;
         private Transform cloudLayer;
         private Transform moonSphere;
         private GameObject starfieldGO;
+        private Material starMat;
         private Texture2D earthTex;
         private Texture2D cloudTex;
-        private float missionProgress;            // 0..1 across the full Earth->Moon->Earth loop
-        private MissionPhase phase = MissionPhase.PreLaunch;
-        private float phaseTime;
-        private const float PhaseDuration = 10f;  // seconds per phase
 
-        private enum MissionPhase { PreLaunch, EarthDeparture, TransitToMoon, MoonArrival, MoonStay, ReturnToEarth, EarthArrival }
+        // ---------------- flight state ----------------
+        private FlightPhase phase = FlightPhase.PreLaunch;
+        private float phaseElapsed;
+        private Vector3 flightDir = Vector3.up;
+        private float flightSpeed;
 
         private Color surfaceSky = new Color(.45f, .68f, .92f);
         private Color spaceSky = new Color(.012f, .014f, .025f);
@@ -59,6 +72,44 @@ namespace SpaceMissionDesign.UI
             BuildCamera();
             Refresh(null);
         }
+
+        // ---------------- status for the HUD ----------------
+
+        public bool InFlight => phase != FlightPhase.PreLaunch && phase != FlightPhase.Complete;
+        public FlightPhase CurrentPhase => phase;
+
+        public float AltitudeUnits
+        {
+            get
+            {
+                if (rocketRoot == null) return 0f;
+                return (rocketRoot.position - EarthCenter).magnitude - EarthR;
+            }
+        }
+
+        /// <summary>One HUD line: phase + altitude/distance readout.</summary>
+        public string FlightStatus
+        {
+            get
+            {
+                const float kmPerUnit = 6f; // display scale
+                switch (phase)
+                {
+                    case FlightPhase.PreLaunch: return "READY ON PAD";
+                    case FlightPhase.Ascent: return $"ASCENT  ·  ALT {AltitudeUnits * kmPerUnit:N0} km";
+                    case FlightPhase.TransitToMoon: return $"TRANSLUNAR  ·  MOON {Vector3.Distance(rocketRoot != null ? rocketRoot.position : EarthCenter, MoonCenter) * kmPerUnit:N0} km";
+                    case FlightPhase.MoonArrival: return "LUNAR APPROACH  ·  BRAKING";
+                    case FlightPhase.MoonStay: return $"LUNAR ORBIT  ·  {(phaseElapsed - MoonStayTotal < 0 ? $"T-{MoonStayTotal - (phaseElapsed - MoonStayTotal):F0}s" : "")}";
+                    case FlightPhase.ReturnToEarth: return $"TRANS-EARTH  ·  HOME {Vector3.Distance(rocketRoot != null ? rocketRoot.position : MoonCenter, new Vector3(10f, 0f, 0f)) * kmPerUnit:N0} km";
+                    case FlightPhase.EarthArrival: return "ENTRY  ·  DESCENDING";
+                    default: return "MISSION COMPLETE";
+                }
+            }
+        }
+
+        private const float MoonStayTotal = 5f;
+
+        // ---------------- materials ----------------
 
         private Material Mat(string name, Texture2D tex, Color? tint = null, float metallic = .2f, float smooth = .45f, Color? emission = null)
         {
@@ -110,6 +161,7 @@ namespace SpaceMissionDesign.UI
             if (cloudMat.HasProperty("_SrcBlend")) cloudMat.SetFloat("_SrcBlend", 1f);
             if (cloudMat.HasProperty("_DstBlend")) cloudMat.SetFloat("_DstBlend", 10f);
             if (cloudMat.HasProperty("_ZWrite")) cloudMat.SetFloat("_ZWrite", 0f);
+            if (cloudMat.HasProperty("_Cull")) cloudMat.SetFloat("_Cull", 0f); // visible from inside too
             cloudMat.renderQueue = 3000;
 
             moonMat = Mat("Moon", TextureGenerator.Moon(), tint: Color.white, .02f, .15f);
@@ -134,6 +186,8 @@ namespace SpaceMissionDesign.UI
             return tex;
         }
 
+        // ---------------- world ----------------
+
         private void BuildWorld()
         {
             RenderSettings.ambientLight = new Color(.30f, .34f, .40f);
@@ -146,44 +200,50 @@ namespace SpaceMissionDesign.UI
             sun.transform.rotation = Quaternion.Euler(48f, -35f, 0f);
             DontDestroyOnLoad(lightGO);
 
-            // --- Earth: planet directly below the pad; surface at y=0 ---
-            // Camera on the surface looks up at the rocket; Earth fills the lower view.
-            earthSphere = Sphere("Earth", new Vector3(10f, -60f, 0f), 60f, earthMat, null).transform;
+            // Earth: fixed planet whose surface sits at y = 0 under the launch pad.
+            // The rocket physically climbs away from it - the horizon curvature,
+            // shrinking planet and thinning sky all come from real geometry.
+            earthSphere = Sphere("Earth", EarthCenter, EarthR * 2f, earthMat, null).transform;
 
-            // --- Cloud layer: just above Earth's surface, transparent ---
-            cloudLayer = Sphere("Cloud layer", new Vector3(10f, -60f, 0f), 68f, cloudMat, null).transform;
+            // Cloud shell hugging the surface - the rocket flies straight through it.
+            cloudLayer = Sphere("Cloud layer", EarthCenter, CloudShellR * 2f, cloudMat, null).transform;
+            if (cloudLayer.TryGetComponent<MeshRenderer>(out var cr) && cr.material != null)
+            {
+                var c = cr.material.color;
+                c.a = .55f;
+                cr.material.color = c;
+            }
 
-            // --- Launch pad sits on Earth's surface ---
+            // Launch pad on the surface.
             Cylinder("Launch pad", new Vector3(10f, 0f, 0f), 14f, .7f, pad, null);
             Cylinder("Pad ring", new Vector3(10f, .3f, 0f), 8f, .35f, grey, null);
 
-            // --- Moon: far ahead in the direction of flight ---
-            moonSphere = Sphere("Moon", new Vector3(10f, 0f, 400f), 18f, moonMat, null).transform;
+            // Moon: fixed far ahead along the flight path.
+            moonSphere = Sphere("Moon", MoonCenter, MoonR * 2f, moonMat, null).transform;
 
             BuildStars();
 
-            Camera.main.backgroundColor = surfaceSky;
+            if (Camera.main != null) Camera.main.backgroundColor = surfaceSky;
         }
 
         private void BuildStars()
         {
             starfieldGO = new GameObject("Starfield");
-            starfieldGO.transform.position = new Vector3(0, 12, 0);
+            starfieldGO.transform.position = new Vector3(0, 0, 800);
             var ps = starfieldGO.AddComponent<ParticleSystem>();
             var main = ps.main;
             main.startSpeed = 0f;
             main.startLifetime = 9999f;
-            main.startSize = new ParticleSystem.MinMaxCurve(.6f, 1.8f);
-            main.maxParticles = 1400;
+            main.startSize = new ParticleSystem.MinMaxCurve(9f, 22f);
+            main.maxParticles = 1600;
             main.simulationSpace = ParticleSystemSimulationSpace.World;
             main.gravityModifier = 0f;
             var emission = ps.emission;
             emission.enabled = false;
 
             var shape = ps.shape;
-            shape.shapeType = ParticleSystemShapeType.SphereShell;
-            shape.radius = 200f;
-            shape.radiusThickness = .06f;
+            shape.radius = 3600f;
+            shape.radiusThickness = .04f; // thin shell of stars
 
             Shader psShader = Shader.Find("Particles/Standard Unlit");
             if (psShader == null) psShader = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
@@ -191,10 +251,11 @@ namespace SpaceMissionDesign.UI
             var psMat = new Material(psShader != null ? psShader : Shader.Find("Unlit/Color"));
             psMat.mainTexture = TextureGenerator.SoftDot();
             if (psMat.HasProperty("_Color")) psMat.SetColor("_Color", new Color(.92f, .95f, 1f, 0f));
+            starMat = psMat;
             var renderer = starfieldGO.GetComponent<ParticleSystemRenderer>();
             renderer.material = psMat;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
-            ps.Emit(1400);
+            ps.Emit(1600);
 
             DontDestroyOnLoad(starfieldGO);
         }
@@ -213,8 +274,8 @@ namespace SpaceMissionDesign.UI
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = surfaceSky;
             cam.fieldOfView = 42f;
-            cam.nearClipPlane = .1f;
-            cam.farClipPlane = 900f;
+            cam.nearClipPlane = .3f;
+            cam.farClipPlane = 9000f; // reaches the Moon and the star shell
 
             var focusGO = new GameObject("Camera Focus");
             focusGO.transform.position = focusHome;
@@ -224,12 +285,12 @@ namespace SpaceMissionDesign.UI
             var orbit = cam.GetComponent<OrbitCamera>();
             if (orbit == null) orbit = cam.gameObject.AddComponent<OrbitCamera>();
             orbit.target = focus;
-            orbit.minDistance = 14f;
-            orbit.maxDistance = 200f;
-            orbit.homeDistance = 60f;
-            orbit.distance = 24f;
-            orbit.targetDistance = 24f;
-            orbit.pitch = -25f;
+            orbit.minDistance = 16f;
+            orbit.maxDistance = 900f;
+            orbit.homeDistance = 40f;
+            orbit.distance = 30f;
+            orbit.targetDistance = 30f;
+            orbit.pitch = -22f;
             orbit.yaw = 0f;
             cameraRig = orbit;
 
@@ -249,7 +310,6 @@ namespace SpaceMissionDesign.UI
         /// </summary>
         private Transform PlaceSaturnVFbx(Transform parent, Vector3 at, float targetHeight)
         {
-            // Try the complete fbx model first.
             var prefab = Resources.Load<GameObject>("Models/saturn");
             if (prefab != null)
             {
@@ -264,21 +324,18 @@ namespace SpaceMissionDesign.UI
 
                 if (TryLocalBounds(go, parent, out var bounds))
                 {
-                    // Stand the rocket up (longest axis = +Y).
                     var upright = AxisToUpRotation(bounds.size);
                     if (upright != Quaternion.identity)
                     {
                         go.transform.localRotation = upright;
                         if (TryLocalBounds(go, parent, out var stood)) bounds = stood;
                     }
-                    // Make sure the base points down.
                     if (WideEndIsUp(go))
                     {
                         go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f) * go.transform.localRotation;
                         if (TryLocalBounds(go, parent, out var flipped)) bounds = flipped;
                     }
 
-                    // Uniform scale so the rocket is targetHeight tall.
                     float h = Mathf.Max(bounds.size.y, .0001f);
                     var scale = Vector3.one * (targetHeight / h);
                     go.transform.localScale = scale;
@@ -397,20 +454,15 @@ namespace SpaceMissionDesign.UI
         public void Refresh(SpacecraftDesign design)
         {
             if (rocketRoot != null) Destroy(rocketRoot.gameObject);
-            launching = false;
-            phase = MissionPhase.PreLaunch;
-            phaseTime = 0f;
-            missionProgress = 0f;
-            if (focus != null) focus.position = focusHome;
+            ResetFlightState();
 
             var root = new GameObject("Rocket").transform;
             root.position = new Vector3(10f, 0f, 0f);
+            root.rotation = Quaternion.identity;
             rocketRoot = root;
 
-            // --- Load the complete Saturn V.fbx rocket ---
             var saturnV = PlaceSaturnVFbx(root, new Vector3(0, 0, 0), 28f);
 
-            // Fallback: primitive rocket if the glb is missing.
             if (saturnV == null)
             {
                 Cylinder("Stage 1", new Vector3(0, Stage1Base + Stage1H * .5f, 0), Stage1D * .5f, Stage1H, white, root);
@@ -421,7 +473,6 @@ namespace SpaceMissionDesign.UI
                 Sphere("Tower tip", new Vector3(0, StackTop + 1.25f, 0), .24f, dark, root);
             }
 
-            // Engine flame (hidden until liftoff).
             var flameGO = Cylinder("Engine flame", new Vector3(0, -3.4f, 0), 1.2f, 6f, flameMat, root);
             flame = flameGO.transform;
             flameBaseScale = flame.localScale;
@@ -429,7 +480,25 @@ namespace SpaceMissionDesign.UI
 
             BuildExhaust(root, -3.4f);
 
+            if (focus != null) focus.position = focusHome;
+            if (cameraRig != null) cameraRig.ClearPan();
+            if (Camera.main != null) Camera.main.backgroundColor = surfaceSky;
+
             DontDestroyOnLoad(root.gameObject);
+        }
+
+        private void ResetFlightState()
+        {
+            phase = FlightPhase.PreLaunch;
+            phaseElapsed = 0f;
+            flightDir = Vector3.up;
+            flightSpeed = 0f;
+            if (flame != null) flame.gameObject.SetActive(false);
+            if (exhaust != null)
+            {
+                var em = exhaust.emission;
+                em.enabled = false;
+            }
         }
 
         private void BuildExhaust(Transform root, float y)
@@ -467,154 +536,246 @@ namespace SpaceMissionDesign.UI
             exhaust = ps;
         }
 
+        // ---------------- continuous flight ----------------
+
         public void PlayLaunch()
         {
-            if (rocketRoot != null && !launching) StartCoroutine(LaunchRoutine());
+            if (rocketRoot == null || InFlight) return;
+            ResetFlightState();
+            cameraRig?.ClearPan();
+            phase = FlightPhase.Ascent;
+            phaseElapsed = 0f;
+            if (Camera.main != null) Camera.main.backgroundColor = surfaceSky;
         }
 
-        private bool launching;
-
-        /// <summary>
-        /// Full Earth -> Moon -> Earth round trip. Each phase advances the camera,
-        /// planet sizes/positions, and rocket state so the player sees Earth recede,
-        /// the Moon grow, then Earth return.
-        /// </summary>
-        private IEnumerator LaunchRoutine()
+        /// <summary>Ends the flight immediately (skip button) and reports completion.</summary>
+        public void SkipToResults()
         {
-            launching = true;
-            cameraRig?.ClearPan();
-            if (cameraRig != null) cameraRig.departing = true;
-
-            var root = rocketRoot;
-            float t = 0f;
-            float ignition = .55f;
-            float launchDuration = 6f;
-
-            float startDist = cameraRig != null ? cameraRig.distance : 24f;
-            float startPitch = cameraRig != null ? cameraRig.pitch : -25f;
-
-            if (flame != null) flame.gameObject.SetActive(true);
-            if (exhaust != null)
-            {
-                var em = exhaust.emission;
-                em.enabled = true;
-            }
-
-            // Cache initial planet state.
-            Vector3 earthStart = earthSphere != null ? earthSphere.position : new Vector3(10, -70, -10);
-            float earthStartScale = earthSphere != null ? earthSphere.localScale.x : 110f;
-            Vector3 moonStart = moonSphere != null ? moonSphere.position : new Vector3(10, 8, 420);
-            float moonStartScale = moonSphere != null ? moonSphere.localScale.x : 18f;
-
-            while (t < launchDuration)
-            {
-                t += Time.deltaTime;
-                if (root == null) yield break;
-
-                float u = Mathf.Clamp01(t / launchDuration);
-                float s = u * u * (3f - 2f * u); // smoothstep
-
-                // Phase 1: Earth departure.
-                phase = MissionPhase.EarthDeparture;
-                phaseTime = t;
-
-                if (flame != null)
-                {
-                    float flicker = 1f + Mathf.Sin(Time.time * 38f) * .12f;
-                    flame.localScale = new Vector3(flameBaseScale.x * flicker, flameBaseScale.y * (2f - flicker), flameBaseScale.z * flicker);
-                }
-
-                if (t > ignition)
-                {
-                    float tt = t - ignition;
-                    float speed = tt * tt * 4.6f + tt * 2.6f;
-                    root.position += Vector3.up * (speed * Time.deltaTime);
-                    root.Rotate(Vector3.up, 2f * Time.deltaTime, Space.World);
-                }
-
-                // Earth recedes below and grows (curved horizon).
-                if (earthSphere != null)
-                {
-                    float earthY = Mathf.Lerp(-60f, -220f, s);
-                    float earthScale = Mathf.Lerp(60f, 150f, s);
-                    earthSphere.position = earthStart + new Vector3(0f, earthY - earthStart.y, 0f);
-                    earthSphere.localScale = Vector3.one * earthScale;
-                }
-
-                // Clouds thicken as we climb, then fade in space.
-                if (cloudLayer != null)
-                {
-                    cloudLayer.position = earthSphere != null ? earthSphere.position : moonStart;
-                    float cloudAlpha = Mathf.Lerp(0f, .5f, s);
-                    cloudAlpha = cloudAlpha * (1f - s); // visible mid-climb, fades in space
-                    var cloudRend = cloudLayer.GetComponent<MeshRenderer>();
-                    if (cloudRend != null && cloudRend.material != null)
-                    {
-                        Color c = cloudRend.material.color;
-                        c.a = cloudAlpha;
-                        cloudRend.material.color = c;
-                    }
-                    cloudLayer.localScale = Vector3.one * Mathf.Lerp(68f, 160f, s);
-                }
-
-                // Sky: surface blue -> space black.
-                if (Camera.main != null)
-                    Camera.main.backgroundColor = Color.Lerp(surfaceSky, spaceSky, s);
-
-                // Stars fade in.
-                if (starfieldGO != null)
-                {
-                    var ps = starfieldGO.GetComponent<ParticleSystem>();
-                    if (ps != null)
-                    {
-                        var emission = ps.emission;
-                        emission.enabled = s > .35f;
-                        var renderer = starfieldGO.GetComponent<ParticleSystemRenderer>();
-                        if (renderer != null && renderer.material != null && renderer.material.HasProperty("_Color"))
-                        {
-                            Color c = renderer.material.color;
-                            c.a = Mathf.Lerp(0f, 1f, Mathf.Clamp01((s - .35f) / .65f));
-                            renderer.material.color = c;
-                        }
-                    }
-                }
-
-                // Moon grows ahead.
-                if (moonSphere != null)
-                {
-                    float moonZ = Mathf.Lerp(400f, 320f, s);
-                    float moonScale = Mathf.Lerp(18f, 40f, s);
-                    moonSphere.position = new Vector3(moonStart.x, moonStart.y, moonZ);
-                    moonSphere.localScale = Vector3.one * moonScale;
-                }
-
-                // Camera pulls back and tilts down.
-                if (cameraRig != null)
-                {
-                    cameraRig.distance = Mathf.Lerp(startDist, 85f, s);
-                    cameraRig.targetDistance = cameraRig.distance;
-                    cameraRig.pitch = Mathf.Lerp(startPitch, 15f, s);
-                    cameraRig.pitch = Mathf.Clamp(cameraRig.pitch, -20f, 85f);
-                    Vector3 focusTarget = root.position + new Vector3(0f, 8f, 0f);
-                    focus.position = Vector3.Lerp(focus.position, focusTarget, Time.deltaTime * 2.5f);
-                }
-
-                yield return null;
-            }
-
-            // Transition into transit phases.
-            phase = MissionPhase.TransitToMoon;
-
+            if (!InFlight) return;
+            phase = FlightPhase.Complete;
             if (flame != null) flame.gameObject.SetActive(false);
             if (exhaust != null)
             {
                 var em = exhaust.emission;
                 em.enabled = false;
             }
+            MissionComplete?.Invoke();
+        }
 
-            launching = false;
-            if (cameraRig != null) cameraRig.departing = false;
-            missionProgress = 1f;
+        private float MoonStayClock;
+
+        private void Update()
+        {
+            if (rocketRoot == null) return;
+
+            // Camera focus chases the rocket the whole time so the player can orbit freely.
+            Vector3 focusTarget = phase == FlightPhase.PreLaunch
+                ? focusHome
+                : rocketRoot.position + Vector3.up * 10f;
+            float k = 1f - Mathf.Exp(-3.5f * Time.deltaTime);
+            focus.position = Vector3.Lerp(focus.position, focusTarget, k);
+
+            if (!InFlight) return;
+
+            phaseElapsed += Time.deltaTime;
+            StepFlight();
+
+            // --- environment driven by real altitude ---
+            float alt = AltitudeUnits;
+
+            // Sky fades from blue to space-black as the atmosphere thins.
+            float skyT = Mathf.Clamp01((alt - AtmoFadeStart) / (AtmoFadeEnd - AtmoFadeStart));
+            if (Camera.main != null)
+                Camera.main.backgroundColor = Color.Lerp(surfaceSky, spaceSky, skyT);
+
+            // Stars fade in with altitude.
+            if (starMat != null && starMat.HasProperty("_Color"))
+            {
+                Color c = starMat.color;
+                c.a = Mathf.Clamp01((alt - 70f) / 110f);
+                starMat.color = c;
+            }
+
+            // Cloud alpha: thicken through the shell, gone once clear of the atmosphere.
+            if (cloudLayer.TryGetComponent<MeshRenderer>(out var cloudRend) && cloudRend.material != null)
+            {
+                Color c = cloudRend.material.color;
+                c.a = .55f * (1f - Mathf.Clamp01((alt - 40f) / 90f));
+                cloudRend.material.color = c;
+            }
+
+            UpdateEngineVisuals();
+        }
+
+        private void StepFlight()
+        {
+            var pos = rocketRoot.position;
+            float dt = Time.deltaTime;
+            Vector3 toMoon = (MoonCenter - EarthCenter).normalized;
+            Vector3 upNow = (pos - EarthCenter).normalized;
+            float alt = (pos - EarthCenter).magnitude - EarthR;
+
+            switch (phase)
+            {
+                case FlightPhase.Ascent:
+                {
+                    // Continuous acceleration off the pad; pitch over toward the Moon
+                    // between turnStartAlt and turnFullAlt (classic gravity turn).
+                    const float turnStartAlt = 70f, turnFullAlt = 260f;
+                    float climb = Mathf.Clamp01(alt / turnFullAlt);
+                    flightSpeed = Mathf.Lerp(9f, 165f, climb);
+
+                    float turn = Mathf.Clamp01((alt - turnStartAlt) / (turnFullAlt - turnStartAlt));
+                    flightDir = Vector3.Slerp(Vector3.up, toMoon, turn).normalized;
+
+                    pos += flightDir * (flightSpeed * dt);
+
+                    if (turn >= 1f)
+                    {
+                        phase = FlightPhase.TransitToMoon;
+                        phaseElapsed = 0f;
+                    }
+                    break;
+                }
+
+                case FlightPhase.TransitToMoon:
+                {
+                    flightSpeed = 430f;
+                    flightDir = (MoonCenter - pos).normalized;
+                    pos += flightDir * (flightSpeed * dt);
+
+                    float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
+                    if (distMoonSurf < 850f)
+                    {
+                        phase = FlightPhase.MoonArrival;
+                        phaseElapsed = 0f;
+                    }
+                    break;
+                }
+
+                case FlightPhase.MoonArrival:
+                {
+                    float distMoonSurf = Vector3.Distance(pos, MoonCenter) - MoonR;
+                    float brake = Mathf.Clamp01(1f - distMoonSurf / 850f);
+                    flightSpeed = Mathf.Lerp(430f, 55f, brake * brake);
+                    flightDir = (MoonCenter - pos).normalized;
+                    pos += flightDir * (flightSpeed * dt);
+
+                    if (distMoonSurf < 60f)
+                    {
+                        phase = FlightPhase.MoonStay;
+                        phaseElapsed = 0f;
+                        MoonStayClock = 0f;
+                        SetBurn(false);
+                    }
+                    break;
+                }
+
+                case FlightPhase.MoonStay:
+                {
+                    // Glide around the Moon while the crew does science.
+                    MoonStayClock += dt;
+                    Vector3 orbitNormal = Vector3.Cross(toMoon, Vector3.right).normalized;
+                    Vector3 a = Vector3.Cross(orbitNormal, toMoon).normalized;
+                    Vector3 b = orbitNormal;
+                    float ang = MoonStayClock * .55f;
+                    pos = MoonCenter + (a * Mathf.Cos(ang) + b * Mathf.Sin(ang)) * (MoonR + 85f);
+
+                    if (MoonStayClock >= MoonStayTotal)
+                    {
+                        phase = FlightPhase.ReturnToEarth;
+                        phaseElapsed = 0f;
+                        flightSpeed = 60f;
+                        SetBurn(true);
+                    }
+                    break;
+                }
+
+                case FlightPhase.ReturnToEarth:
+                {
+                    Vector3 home = new Vector3(10f, 40f, 0f);
+                    flightDir = (home - pos).normalized;
+                    float distHomeSurf = Vector3.Distance(pos, new Vector3(10f, 0f, 0f));
+                    if (distHomeSurf < 900f)
+                    {
+                        float brake = Mathf.Clamp01(1f - distHomeSurf / 900f);
+                        flightSpeed = Mathf.Max(Mathf.Lerp(430f, 26f, brake * brake), 18f);
+                    }
+                    else
+                    {
+                        flightSpeed = Mathf.Min(flightSpeed + 300f * dt, 430f);
+                    }
+                    pos += flightDir * (flightSpeed * dt);
+
+                    if (distHomeSurf < 120f)
+                    {
+                        phase = FlightPhase.EarthArrival;
+                        phaseElapsed = 0f;
+                    }
+                    break;
+                }
+
+                case FlightPhase.EarthArrival:
+                {
+                    float altHome = (pos - EarthCenter).magnitude - EarthR;
+                    flightSpeed = Mathf.Max(flightSpeed - 90f * dt, 10f);
+                    Vector3 descend = (EarthCenter - pos).normalized;
+                    pos += descend * (flightSpeed * dt);
+
+                    if (altHome <= .5f)
+                    {
+                        // Touch down on the pad.
+                        Vector3 radial = (pos - EarthCenter).normalized;
+                        pos = EarthCenter + radial * (EarthR + .01f);
+                        pos.x = 10f; pos.z = 0f;
+                        rocketRoot.position = pos;
+                        rocketRoot.rotation = Quaternion.LookRotation(Vector3.forward, radial);
+                        phase = FlightPhase.Complete;
+                        SetBurn(false);
+                        MissionComplete?.Invoke();
+                        return;
+                    }
+                    break;
+                }
+            }
+
+            rocketRoot.position = pos;
+
+            // Nose follows the flight direction.
+            if (phase != FlightPhase.MoonStay && phase != FlightPhase.EarthArrival)
+            {
+                Quaternion want = Quaternion.FromToRotation(Vector3.up, flightDir);
+                rocketRoot.rotation = Quaternion.Slerp(rocketRoot.rotation, want, 1f - Mathf.Exp(-2.2f * dt));
+            }
+        }
+
+        private void SetBurn(bool on)
+        {
+            if (flame != null) flame.gameObject.SetActive(on);
+            if (exhaust != null)
+            {
+                var em = exhaust.emission;
+                em.enabled = on;
+            }
+        }
+
+        private void UpdateEngineVisuals()
+        {
+            bool burning = phase == FlightPhase.Ascent || phase == FlightPhase.TransitToMoon ||
+                           phase == FlightPhase.MoonArrival || phase == FlightPhase.ReturnToEarth ||
+                           phase == FlightPhase.EarthArrival;
+            if (flame != null && flame.gameObject.activeSelf != burning) SetBurn(burning);
+            if (exhaust != null)
+            {
+                var em = exhaust.emission;
+                if (em.enabled != burning) em.enabled = burning;
+            }
+
+            if (flame != null && burning)
+            {
+                float flicker = 1f + Mathf.Sin(Time.time * 38f) * .12f;
+                flame.localScale = new Vector3(flameBaseScale.x * flicker, flameBaseScale.y * (2f - flicker), flameBaseScale.z * flicker);
+            }
         }
 
         // ---------------- primitive helpers ----------------
@@ -668,7 +829,9 @@ namespace SpaceMissionDesign.UI
     }
 
     /// <summary>
-    /// Orbit / pan / zoom camera driven by the mouse.
+    /// Orbit / pan / zoom camera driven by the mouse. Input stays live during flight -
+    /// the camera simply keeps following the rocket while the player orbits it.
+    /// LEFT-DRAG orbit · RIGHT-DRAG pan · SCROLL zoom · DOUBLE-CLICK recentre.
     /// </summary>
     public sealed class OrbitCamera : MonoBehaviour
     {
@@ -685,15 +848,12 @@ namespace SpaceMissionDesign.UI
         public float pitch = 5f;
         public float yaw = 0f;
 
-        /// <summary>When true, mouse input is ignored and the camera is driven directly (launch departure).</summary>
-        public bool departing;
-
         public float homeDistance = 46f;
         public float targetDistance;
         private Vector3 panWanted;
         private Vector3 panApplied;
         private bool initialised;
-        private bool leftPan;
+        private bool rightPan;
         private float lastLeftClick = -10f;
         private Vector3 lastMouse;
 
@@ -713,54 +873,43 @@ namespace SpaceMissionDesign.UI
             Vector3 delta = mouse - lastMouse;
             lastMouse = mouse;
 
-            if (!departing)
+            float scroll = Input.mouseScrollDelta.y;
+            if (Mathf.Abs(scroll) > .01f)
             {
-                float scroll = Input.mouseScrollDelta.y;
-                if (Mathf.Abs(scroll) > .01f)
-                {
-                    float factor = Mathf.Clamp(1f - scroll * zoomStep, .55f, 1.8f);
-                    targetDistance = Mathf.Clamp(targetDistance * factor, minDistance, maxDistance);
-                }
-
-                distance = Mathf.Lerp(distance, targetDistance, 1f - Mathf.Exp(-14f * dt));
-                if (Mathf.Abs(distance - targetDistance) < .002f) distance = targetDistance;
-
-                bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-                if (Input.GetMouseButton(1) && !shift)
-                {
-                    yaw += Input.GetAxis("Mouse X") * orbitSensitivity;
-                    pitch -= Input.GetAxis("Mouse Y") * orbitSensitivity;
-                }
-
-                if (Input.GetMouseButtonDown(0) && !shift && !PointerOverUI())
-                {
-                    float now = Time.unscaledTime;
-                    if (now - lastLeftClick < .28f)
-                    {
-                        ResetView();
-                    }
-                    else
-                    {
-                        leftPan = true;
-                    }
-                    lastLeftClick = now;
-                }
-                if (Input.GetMouseButtonUp(0))
-                    leftPan = false;
-
-                bool panHeld = Input.GetMouseButton(2) ||
-                               (shift && (Input.GetMouseButton(0) || Input.GetMouseButton(1))) ||
-                               leftPan;
-
-                if (panHeld)
-                {
-                    float worldPerPixel = WorldUnitsPerPixel();
-                    panWanted -= (transform.right * delta.x + transform.up * delta.y) * worldPerPixel;
-                    panWanted = Vector3.ClampMagnitude(panWanted, maxPanDistance);
-                }
-
-                panApplied = Vector3.Lerp(panApplied, panWanted, 1f - Mathf.Exp(-20f * dt));
+                float factor = Mathf.Clamp(1f - scroll * zoomStep, .55f, 1.8f);
+                targetDistance = Mathf.Clamp(targetDistance * factor, minDistance, maxDistance);
             }
+
+            distance = Mathf.Lerp(distance, targetDistance, 1f - Mathf.Exp(-14f * dt));
+            if (Mathf.Abs(distance - targetDistance) < .002f) distance = targetDistance;
+
+            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+
+            // LEFT-DRAG orbits (the natural "move the mouse to look around" gesture).
+            if (Input.GetMouseButton(0) && !shift && !PointerOverUI())
+            {
+                yaw += Input.GetAxis("Mouse X") * orbitSensitivity;
+                pitch -= Input.GetAxis("Mouse Y") * orbitSensitivity;
+            }
+
+            // RIGHT-DRAG (or MIDDLE-DRAG, or SHIFT+drag) pans.
+            rightPan = Input.GetMouseButton(1) || Input.GetMouseButton(2) || (shift && Input.GetMouseButton(0));
+            if (rightPan)
+            {
+                float worldPerPixel = WorldUnitsPerPixel();
+                panWanted -= (transform.right * delta.x + transform.up * delta.y) * worldPerPixel;
+                panWanted = Vector3.ClampMagnitude(panWanted, maxPanDistance);
+            }
+
+            // DOUBLE-CLICK recentres on the rocket.
+            if (Input.GetMouseButtonDown(0) && !shift && !PointerOverUI())
+            {
+                float now = Time.unscaledTime;
+                if (now - lastLeftClick < .28f) ResetView();
+                lastLeftClick = now;
+            }
+
+            panApplied = Vector3.Lerp(panApplied, panWanted, 1f - Mathf.Exp(-20f * dt));
 
             pitch = Mathf.Clamp(pitch, -20f, 85f);
             var pivot = target.position + panApplied;

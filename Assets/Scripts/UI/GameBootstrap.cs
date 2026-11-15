@@ -22,13 +22,14 @@ namespace SpaceMissionDesign.UI
         private Text statsText;
         private Text budgetValueText;
         private Text violationsText;
+        private Text flightHud;
         private Button nextButton;
         private MissionManager manager => MissionManager.Instance;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void AutoStart()
         {
-            if (UnityEngine.Object.FindFirstObjectByType<GameBootstrap>() != null) return;
+            if (UnityEngine.Object.FindAnyObjectByType<GameBootstrap>() != null) return;
             var go = new GameObject("Game Bootstrap");
             go.AddComponent<GameBootstrap>();
         }
@@ -64,16 +65,16 @@ namespace SpaceMissionDesign.UI
 
         private void EnsureManagers()
         {
-            if (FindFirstObjectByType<MissionManager>() == null) new GameObject("Mission Manager").AddComponent<MissionManager>();
-            if (FindFirstObjectByType<SpacecraftDesigner>() == null) new GameObject("Spacecraft Designer").AddComponent<SpacecraftDesigner>();
-            if (FindFirstObjectByType<SimulationEngine>() == null) new GameObject("Simulation Engine").AddComponent<SimulationEngine>();
-            if (FindFirstObjectByType<ScoreManager>() == null) new GameObject("Score Manager").AddComponent<ScoreManager>();
-            if (FindFirstObjectByType<MultiplayerManager>() == null) new GameObject("Multiplayer Manager").AddComponent<MultiplayerManager>();
+            if (FindAnyObjectByType<MissionManager>() == null) new GameObject("Mission Manager").AddComponent<MissionManager>();
+            if (FindAnyObjectByType<SpacecraftDesigner>() == null) new GameObject("Spacecraft Designer").AddComponent<SpacecraftDesigner>();
+            if (FindAnyObjectByType<SimulationEngine>() == null) new GameObject("Simulation Engine").AddComponent<SimulationEngine>();
+            if (FindAnyObjectByType<ScoreManager>() == null) new GameObject("Score Manager").AddComponent<ScoreManager>();
+            if (FindAnyObjectByType<MultiplayerManager>() == null) new GameObject("Multiplayer Manager").AddComponent<MultiplayerManager>();
         }
 
         private void EnsureEventSystem()
         {
-            if (FindFirstObjectByType<EventSystem>() != null) return;
+            if (FindAnyObjectByType<EventSystem>() != null) return;
             var go = new GameObject("Event System");
             go.AddComponent<EventSystem>();
             go.AddComponent<StandaloneInputModule>();
@@ -274,7 +275,7 @@ namespace SpaceMissionDesign.UI
             accImg.raycastTarget = false;
 
             // Camera control hint on the 3D side of the screen.
-            NewText(parent, "LEFT-DRAG move  -  RIGHT-DRAG orbit  -  SCROLL zoom  -  DOUBLE-CLICK recentre", 13,
+            NewText(parent, "LEFT-DRAG orbit  -  RIGHT-DRAG pan  -  SCROLL zoom  -  DOUBLE-CLICK recentre", 13,
                 new Vector2(900f, -480f), new Vector2(1000f, 24f), TextAnchor.MiddleCenter,
                 new Color(.75f, .85f, .95f));
         }
@@ -473,7 +474,7 @@ namespace SpaceMissionDesign.UI
         private void AddDefaultComponent(ComponentType type)
         {
             var comp = MakeDefaultComponent(type);
-            var designer = FindFirstObjectByType<SpacecraftDesigner>();
+            var designer = FindAnyObjectByType<SpacecraftDesigner>();
             if (designer != null && comp != null) designer.AddComponent(comp);
             RefreshDesignStats();
         }
@@ -529,7 +530,7 @@ namespace SpaceMissionDesign.UI
             next.interactable = d.instruments.Count > 0;
         }
 
-        private SpacecraftDesigner designer => FindFirstObjectByType<SpacecraftDesigner>();
+        private SpacecraftDesigner designer => FindAnyObjectByType<SpacecraftDesigner>();
 
         private static List<ScientificInstrument> GetInstrumentsFor(string destination)
         {
@@ -626,21 +627,36 @@ namespace SpaceMissionDesign.UI
                     new Vector2(-500, -170), new Vector2(880, 90), TextAnchor.MiddleCenter, new Color(1f, .45f, .42f));
                 return;
             }
-            var engine = FindFirstObjectByType<SimulationEngine>();
+            var engine = FindAnyObjectByType<SimulationEngine>();
             if (engine == null) { Debug.LogError("No SimulationEngine found."); return; }
             engine.RunSimulation();
 
-            // Reset the 3D stack and fly it while the results are being prepared.
+            // Reset the 3D stack and fly it: Earth departure, Moon, and return,
+            // continuous until the rocket lands back on the pad.
             Mission3DView.Instance?.Refresh(manager.SpacecraftDesign);
             Mission3DView.Instance?.PlayLaunch();
-            NewText(canvas.transform, "LIFTOFF — running flight simulation…", 24,
+            NewText(canvas.transform, "LIFTOFF — flight in progress…", 24,
                 new Vector2(-500, -170), new Vector2(880, 44), TextAnchor.MiddleCenter, new Color(1f, .82f, .45f), true);
 
-            // Freeze input during the launch sequence.
-            var raycaster = canvas.GetComponent<GraphicRaycaster>();
-            if (raycaster != null) raycaster.enabled = false;
+            // Flight HUD (top-right, over the 3D view), updated every frame.
+            flightHud = NewText(canvas.transform, "", 17, new Vector2(400, 440), new Vector2(520, 34),
+                TextAnchor.UpperRight, new Color(.75f, .9f, 1f), true);
 
-            Invoke(nameof(ShowResults), 2.6f);
+            // Skip button while the flight plays out.
+            NewButton(canvas.transform, "SKIP FLIGHT", new Vector2(400, -330), new Vector2(240, 48),
+                () => Mission3DView.Instance?.SkipToResults(), new Color(.25f, .28f, .34f), 16);
+
+            // Results appear when the round trip completes.
+            Mission3DView.MissionComplete = ShowResults;
+        }
+
+        private void Update()
+        {
+            if (flightHud == null) return;
+            var view = Mission3DView.Instance;
+            if (view == null) { flightHud.enabled = false; return; }
+            flightHud.enabled = view.InFlight || view.CurrentPhase == Mission3DView.FlightPhase.Complete;
+            if (flightHud.enabled) flightHud.text = view.FlightStatus;
         }
 
         private void ShowResults()
